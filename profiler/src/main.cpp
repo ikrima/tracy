@@ -310,6 +310,9 @@ int main( int argc, char** argv )
 
     ImGui::StyleColorsDark();
     auto& style = ImGui::GetStyle();
+    style.WindowRounding = 0.0f;
+    style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    ImGui::Spectrum::StyleColorsSpectrum();
     style.WindowBorderSize = 1.f * dpiScale;
     style.FrameBorderSize = 1.f * dpiScale;
     style.FrameRounding = 5.f;
@@ -908,12 +911,21 @@ static void DrawContents()
 
     // Rendering
     ImGui::Render();
-    glfwMakeContextCurrent(s_glfwWindow);
     glViewport(0, 0, display_w, display_h);
     glClearColor(clear_color.x, clear_color.y, clear_color.z, clear_color.w);
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-    glfwMakeContextCurrent(s_glfwWindow);
+    // Update and Render additional Platform Windows
+    // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
+    //  For this specific demo app we could also call glfwMakeContextCurrent(window) directly)
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        GLFWwindow* backup_current_context = glfwGetCurrentContext();
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+        glfwMakeContextCurrent(backup_current_context);
+    }
+
     glfwSwapBuffers(s_glfwWindow);
 }
