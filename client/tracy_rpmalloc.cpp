@@ -173,7 +173,7 @@ static FORCEINLINE int32_t atomic_load32(atomic32_t* src) { return std::atomic_l
 static FORCEINLINE void    atomic_store32(atomic32_t* dst, int32_t val) { std::atomic_store_explicit(dst, val, std::memory_order_relaxed); }
 static FORCEINLINE int32_t atomic_incr32(atomic32_t* val) { return std::atomic_fetch_add_explicit(val, 1, std::memory_order_relaxed) + 1; }
 #if ENABLE_STATISTICS || ENABLE_ADAPTIVE_THREAD_CACHE
-static FORCEINLINE int32_t atomic_decr32(atomic32_t* val) { return atomic_fetch_add_explicit(val, -1, memory_order_relaxed) - 1; }
+static FORCEINLINE int32_t atomic_decr32(atomic32_t* val) { return atomic_fetch_add_explicit(val, -1, std::memory_order_relaxed) - 1; }
 #endif
 static FORCEINLINE int32_t atomic_add32(atomic32_t* val, int32_t add) { return std::atomic_fetch_add_explicit(val, add, std::memory_order_relaxed) + add; }
 static FORCEINLINE void*   atomic_load_ptr(atomicptr_t* src) { return std::atomic_load_explicit(src, std::memory_order_relaxed); }
