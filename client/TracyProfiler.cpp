@@ -1375,11 +1375,11 @@ void Profiler::Worker()
         m_refTimeGpu = 0;
 
 #ifdef TRACY_ON_DEMAND
-        OnDemandPayloadMessage onDemand;
-        onDemand.frames = m_frameCount.load( std::memory_order_relaxed );
-        onDemand.currentTime = currentTime;
+        OnDemandPayloadMessage onDemand2;
+        onDemand2.frames = m_frameCount.load( std::memory_order_relaxed );
+        onDemand2.currentTime = currentTime;
 
-        m_sock->Send( &onDemand, sizeof( onDemand ) );
+        m_sock->Send( &onDemand2, sizeof( onDemand2 ) );
 
         m_deferredLock.lock();
         for( auto& item : m_deferredQueue )
