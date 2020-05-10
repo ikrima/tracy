@@ -124,7 +124,7 @@ View::View( const char* addr, int port, ImFont* fixedWidth, ImFont* smallFont, I
     : m_worker( addr, port )
     , m_staticView( false )
     , m_pause( false )
-    , m_forceConnectionPopup( true )
+    , m_forceConnectionPopup( true, true )
     , m_frames( nullptr )
     , m_messagesScrollBottom( true )
     , m_smallFont( smallFont )
@@ -429,6 +429,11 @@ bool View::DrawImpl()
         return !wasCancelled;
     }
 
+    if( !m_uarchSet )
+    {
+        m_uarchSet = true;
+        m_sourceView->SetCpuId( m_worker.GetCpuId() );
+    }
     if( !m_userData.Valid() ) m_userData.Init( m_worker.GetCaptureProgram().c_str(), m_worker.GetCaptureTime() );
     if( m_saveThreadState.load( std::memory_order_acquire ) == SaveThreadState::NeedsJoin )
     {
@@ -479,6 +484,7 @@ bool View::DrawImpl()
         m_stcb( m_worker.GetCaptureName().c_str() );
     }
 
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
     {
         auto& style = ImGui::GetStyle();
         const auto wrPrev = style.WindowRounding;
@@ -489,10 +495,9 @@ bool View::DrawImpl()
         style.WindowPadding = ImVec2( 4.f, 4.f );
         style.Colors[ImGuiCol_WindowBg] = ImVec4( 0.129f, 0.137f, 0.11f, 1.f );
 
-        ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowPos( viewport->Pos );
         ImGui::SetNextWindowSize( ImVec2( m_rootWidth, m_rootHeight ) );
-        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowViewport( viewport->ID );
         ImGui::Begin( "Timeline view###Profiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking );
 
         style.WindowRounding = wrPrev;
@@ -513,8 +518,8 @@ bool View::DrawImpl()
         {
             if( m_forceConnectionPopup )
             {
-                m_forceConnectionPopup = false;
-                ImGui::SetNextWindowPos( ImGui::GetCursorPos() );
+                m_forceConnectionPopup.Decay( false );
+                ImGui::SetNextWindowPos( viewport->Pos + ImGui::GetCursorPos() );
             }
             ImGui::OpenPopup( "TracyConnectionPopup" );
         }
@@ -13133,6 +13138,27 @@ void View::DrawInfo()
     ImGui::Separator();
     TextFocused( "PID:", RealToString( m_worker.GetPid() ) );
     TextFocused( "Host info:", m_worker.GetHostInfo().c_str() );
+
+    const auto cpuId = m_worker.GetCpuId();
+    if( cpuId != 0 )
+    {
+        const auto stepping = cpuId & 0xF;
+        const auto baseModel = ( cpuId >> 4 ) & 0xF;
+        const auto baseFamily = ( cpuId >> 8 ) & 0xF;
+        const auto extModel = ( cpuId >> 12 ) & 0xF;
+        const auto extFamily = ( cpuId >> 16 );
+
+        const uint32_t model = ( baseFamily == 6 || baseFamily == 15 ) ? ( ( extModel << 4 ) | baseModel ) : baseModel;
+        const uint32_t family = baseFamily == 15 ? baseFamily + extFamily : baseFamily;
+
+        TextFocused( "CPU:", m_worker.GetCpuManufacturer() );
+        ImGui::SameLine();
+        TextFocused( "Family", RealToString( family ) );
+        ImGui::SameLine();
+        TextFocused( "Model", RealToString( model ) );
+        ImGui::SameLine();
+        TextFocused( "Stepping", RealToString( stepping ) );
+    }
 
     auto& appInfo = m_worker.GetAppInfo();
     if( !appInfo.empty() )

@@ -11,6 +11,10 @@
 #include <cctype>
 #include <chrono>
 #include <string.h>
+
+#ifdef __MINGW32__
+#  define __STDC_FORMAT_MACROS
+#endif
 #include <inttypes.h>
 
 #include <capstone/capstone.h>
@@ -459,6 +463,12 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
     if( fileVer >= FileVersion( 0, 6, 7 ) )
     {
         f.Read( m_data.cpuArch );
+    }
+    if( fileVer >= FileVersion( 0, 6, 12 ) )
+    {
+        f.Read( m_data.cpuId );
+        f.Read( m_data.cpuManufacturer, 12 );
+        m_data.cpuManufacturer[12] = '\0';
     }
 
     uint64_t sz;
@@ -2897,6 +2907,9 @@ void Worker::Exec()
         m_captureTime = welcome.epoch;
         m_ignoreMemFreeFaults = welcome.onDemand || welcome.isApple;
         m_data.cpuArch = (CpuArchitecture)welcome.cpuArch;
+        m_data.cpuId = welcome.cpuId;
+        memcpy( m_data.cpuManufacturer, welcome.cpuManufacturer, 12 );
+        m_data.cpuManufacturer[12] = '\0';
 
         char dtmp[64];
         time_t date = welcome.epoch;
@@ -3068,7 +3081,7 @@ void Worker::UpdateMbps( int64_t td )
         m_mbpsData.mbps.erase( m_mbpsData.mbps.begin() );
         m_mbpsData.mbps.emplace_back( bytes / ( td * 125.f ) );
     }
-    m_mbpsData.compRatio = float( bytes ) / decBytes;
+    m_mbpsData.compRatio = decBytes == 0 ? 1 : float( bytes ) / decBytes;
     m_mbpsData.queue = m_serverQueryQueue.size();
     m_mbpsData.transferred += bytes;
 }
@@ -6690,6 +6703,8 @@ void Worker::Write( FileWrite& f )
     f.Write( &m_pid, sizeof( m_pid ) );
     f.Write( &m_samplingPeriod, sizeof( m_samplingPeriod ) );
     f.Write( &m_data.cpuArch, sizeof( m_data.cpuArch ) );
+    f.Write( &m_data.cpuId, sizeof( m_data.cpuId ) );
+    f.Write( m_data.cpuManufacturer, 12 );
 
     uint64_t sz = m_captureName.size();
     f.Write( &sz, sizeof( sz ) );

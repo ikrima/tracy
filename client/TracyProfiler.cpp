@@ -170,7 +170,7 @@ struct ThreadHandleWrapper
 #endif
 
 
-#if defined TRACY_HW_TIMER && ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 )
+#if defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64
 static inline void CpuId( uint32_t* regs, uint32_t leaf )
 {
 #if defined _WIN32 || defined __CYGWIN__
@@ -410,12 +410,7 @@ static const char* GetHostInfo()
     auto modelPtr = cpuModel;
     for( uint32_t i=0x80000002; i<0x80000005; ++i )
     {
-#  if defined _WIN32 || defined __CYGWIN__
-        __cpuidex( (int*)regs, i, 0 );
-#  else
-        int zero = 0;
-        asm volatile ( "cpuid" : "=a" (regs[0]), "=b" (regs[1]), "=c" (regs[2]), "=d" (regs[3]) : "a" (i), "c" (zero) );
-#  endif
+        CpuId( regs, i );
         memcpy( modelPtr, regs, sizeof( regs ) ); modelPtr += sizeof( regs );
     }
 
@@ -1222,6 +1217,21 @@ void Profiler::Worker()
     uint8_t cpuArch = CpuArchUnknown;
 #endif
 
+#if defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64
+    uint32_t regs[4];
+    char manufacturer[12];
+    CpuId( regs, 0 );
+    memcpy( manufacturer, regs+1, 4 );
+    memcpy( manufacturer+4, regs+3, 4 );
+    memcpy( manufacturer+8, regs+2, 4 );
+
+    CpuId( regs, 1 );
+    uint32_t cpuId = ( regs[0] & 0xFFF ) | ( ( regs[0] & 0xFFF0000 ) >> 4 );
+#else
+    const char manufacturer[12] = {};
+    uint32_t cpuId = 0;
+#endif
+
     WelcomeMessage welcome;
     MemWrite( &welcome.timerMul, m_timerMul );
     MemWrite( &welcome.initBegin, GetInitTime() );
@@ -1234,6 +1244,8 @@ void Profiler::Worker()
     MemWrite( &welcome.onDemand, onDemand );
     MemWrite( &welcome.isApple, isApple );
     MemWrite( &welcome.cpuArch, cpuArch );
+    memcpy( welcome.cpuManufacturer, manufacturer, 12 );
+    MemWrite( &welcome.cpuId, cpuId );
     memcpy( welcome.programName, procname, pnsz );
     memset( welcome.programName + pnsz, 0, WelcomeMessageProgramNameSize - pnsz );
     memcpy( welcome.hostInfo, hostinfo, hisz );
@@ -1375,11 +1387,11 @@ void Profiler::Worker()
         m_refTimeGpu = 0;
 
 #ifdef TRACY_ON_DEMAND
-        OnDemandPayloadMessage onDemand2;
-        onDemand2.frames = m_frameCount.load( std::memory_order_relaxed );
-        onDemand2.currentTime = currentTime;
+        OnDemandPayloadMessage onDemand;
+        onDemand.frames = m_frameCount.load( std::memory_order_relaxed );
+        onDemand.currentTime = currentTime;
 
-        m_sock->Send( &onDemand2, sizeof( onDemand2 ) );
+        m_sock->Send( &onDemand, sizeof( onDemand ) );
 
         m_deferredLock.lock();
         for( auto& item : m_deferredQueue )

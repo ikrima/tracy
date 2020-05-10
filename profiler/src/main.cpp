@@ -313,9 +313,6 @@ int main( int argc, char** argv )
 
     ImGui::StyleColorsDark();
     auto& style = ImGui::GetStyle();
-    style.WindowRounding = 0.0f;
-    style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    ImGui::Spectrum::StyleColorsSpectrum();
     style.WindowBorderSize = 1.f * dpiScale;
     style.FrameBorderSize = 1.f * dpiScale;
     style.FrameRounding = 5.f;

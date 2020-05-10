@@ -18,6 +18,10 @@
 
 #include "IconsFontAwesome5.h"
 
+#ifndef TRACY_NO_FILESELECTOR
+#  include "../nfd/nfd.h"
+#endif
+
 namespace tracy
 {
 
@@ -83,12 +87,11 @@ SourceView::SourceView( ImFont* font )
     , m_asmBytes( false )
     , m_asmShowSourceLocation( true )
     , m_calcInlineStats( true )
+    , m_atnt( false )
     , m_showJumps( true )
     , m_cpuArch( CpuArchUnknown )
     , m_showLatency( false )
 {
-    SelectMicroArchitecture( "ZEN2" );
-
     m_microArchOpMap.reserve( OpsNum );
     for( int i=0; i<OpsNum; i++ )
     {
@@ -293,6 +296,94 @@ SourceView::~SourceView()
     delete[] m_data;
 }
 
+static constexpr uint32_t PackCpuInfo( uint32_t cpuid )
+{
+    return ( cpuid & 0xFFF ) | ( ( cpuid & 0xFFF0000 ) >> 4 );
+}
+
+struct CpuIdMap
+{
+    uint32_t cpuInfo;
+    const char* moniker;
+};
+
+//                   .------ extended family id
+//                   |.----- extended model id
+//                   || .--- family id
+//                   || |.-- model
+//                   || ||.- stepping
+//                   || |||
+static constexpr CpuIdMap s_cpuIdMap[] = {
+    { PackCpuInfo( 0x810F81 ), "ZEN+" },
+    { PackCpuInfo( 0x800F82 ), "ZEN+" },
+    { PackCpuInfo( 0x870F10 ), "ZEN2" },
+    { PackCpuInfo( 0x830F10 ), "ZEN2" },
+    { PackCpuInfo( 0x860F01 ), "ZEN2" },
+    { PackCpuInfo( 0x0706E5 ), "ICL" },
+    { PackCpuInfo( 0x060663 ), "CNL" },
+    { PackCpuInfo( 0x0906EA ), "CFL" },
+    { PackCpuInfo( 0x0906EB ), "CFL" },
+    { PackCpuInfo( 0x0906EC ), "CFL" },
+    { PackCpuInfo( 0x0906ED ), "CFL" },
+    { PackCpuInfo( 0x0806E9 ), "KBL" },
+    { PackCpuInfo( 0x0806EA ), "KBL" },
+    { PackCpuInfo( 0x0906E9 ), "KBL" },
+    { PackCpuInfo( 0x050654 ), "SKX" },
+    { PackCpuInfo( 0x0406E3 ), "SKL" },
+    { PackCpuInfo( 0x0506E0 ), "SKL" },
+    { PackCpuInfo( 0x0506E3 ), "SKL" },
+    { PackCpuInfo( 0x0306D4 ), "BDW" },
+    { PackCpuInfo( 0x040671 ), "BDW" },
+    { PackCpuInfo( 0x0406F1 ), "BDW" },
+    { PackCpuInfo( 0x0306C3 ), "HSW" },
+    { PackCpuInfo( 0x0306F2 ), "HSW" },
+    { PackCpuInfo( 0x040651 ), "HSW" },
+    { PackCpuInfo( 0x0306A9 ), "IVB" },
+    { PackCpuInfo( 0x0306E3 ), "IVB" },
+    { PackCpuInfo( 0x0306E4 ), "IVB" },
+    { PackCpuInfo( 0x0206A2 ), "SNB" },
+    { PackCpuInfo( 0x0206A7 ), "SNB" },
+    { PackCpuInfo( 0x0206D5 ), "SNB" },
+    { PackCpuInfo( 0x0206D6 ), "SNB" },
+    { PackCpuInfo( 0x0206D7 ), "SNB" },
+    { PackCpuInfo( 0x0206F2 ), "WSM" },
+    { PackCpuInfo( 0x0206C0 ), "WSM" },
+    { PackCpuInfo( 0x0206C1 ), "WSM" },
+    { PackCpuInfo( 0x0206C2 ), "WSM" },
+    { PackCpuInfo( 0x020652 ), "WSM" },
+    { PackCpuInfo( 0x020655 ), "WSM" },
+    { PackCpuInfo( 0x0206E6 ), "NHM" },
+    { PackCpuInfo( 0x0106A1 ), "NHM" },
+    { PackCpuInfo( 0x0106A2 ), "NHM" },
+    { PackCpuInfo( 0x0106A4 ), "NHM" },
+    { PackCpuInfo( 0x0106A5 ), "NHM" },
+    { PackCpuInfo( 0x0106E4 ), "NHM" },
+    { PackCpuInfo( 0x0106E5 ), "NHM" },
+    { PackCpuInfo( 0x010676 ), "WOL" },
+    { PackCpuInfo( 0x01067A ), "WOL" },
+    { PackCpuInfo( 0x0006F2 ), "CON" },
+    { PackCpuInfo( 0x0006F4 ), "CON" },
+    { PackCpuInfo( 0x0006F6 ), "CON" },
+    { PackCpuInfo( 0x0006FB ), "CON" },
+    { PackCpuInfo( 0x0006FD ), "CON" },
+    { 0, 0 }
+};
+
+void SourceView::SetCpuId( uint32_t cpuId )
+{
+    auto ptr = s_cpuIdMap;
+    while( ptr->cpuInfo )
+    {
+        if( cpuId == ptr->cpuInfo )
+        {
+            SelectMicroArchitecture( ptr->moniker );
+            return;
+        }
+        ptr++;
+    }
+    SelectMicroArchitecture( "ZEN2" );
+}
+
 void SourceView::OpenSource( const char* fileName, int line, const View& view )
 {
     m_targetLine = line;
@@ -399,6 +490,7 @@ static bool IsJumpConditionalX86( const char* op )
 bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
 {
     m_asm.clear();
+    m_locMap.clear();
     m_jumpTable.clear();
     m_jumpOut.clear();
     m_maxJumpLevel = 0;
@@ -432,6 +524,7 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
     }
     if( rval != CS_ERR_OK ) return false;
     cs_option( handle, CS_OPT_DETAIL, CS_OPT_ON );
+    cs_option( handle, CS_OPT_SYNTAX, m_atnt ? CS_OPT_SYNTAX_ATT : CS_OPT_SYNTAX_INTEL );
     cs_insn* insn;
     size_t cnt = cs_disasm( handle, (const uint8_t*)code, len, symAddr, 0, &insn );
     if( cnt > 0 )
@@ -728,6 +821,15 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
                     }
                 }
                 if( level > m_maxJumpLevel ) m_maxJumpLevel = level;
+            }
+
+            uint32_t locNum = 0;
+            for( auto& v : m_asm )
+            {
+                if( m_jumpTable.find( v.addr ) != m_jumpTable.end() )
+                {
+                    m_locMap.emplace( v.addr, locNum++ );
+                }
             }
         }
     }
@@ -1224,7 +1326,8 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
         ImGui::PopStyleVar();
     }
 
-    ImGui::BeginChild( "##sourceView", ImVec2( 0, 0 ), true, ImGuiWindowFlags_NoMove );
+    const float bottom = m_srcSampleSelect.empty() ? 0 : ImGui::GetFrameHeight();
+    ImGui::BeginChild( "##sourceView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove );
     if( m_font ) ImGui::PushFont( m_font );
 
     auto draw = ImGui::GetWindowDrawList();
@@ -1347,6 +1450,46 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
 
     if( m_font ) ImGui::PopFont();
     ImGui::EndChild();
+
+    if( !m_srcSampleSelect.empty() )
+    {
+        uint32_t count = 0;
+        uint32_t numLines = 0;
+        for( auto& idx : m_srcSampleSelect )
+        {
+            auto it = ipcount.find( idx );
+            if( it != ipcount.end() )
+            {
+                count += it->second;
+                numLines++;
+            }
+        }
+
+        ImGui::BeginChild( "##srcSelect" );
+        if( ImGui::SmallButton( ICON_FA_TIMES ) )
+        {
+            m_srcSampleSelect.clear();
+            m_srcGroupSelect = -1;
+        }
+        ImGui::SameLine();
+        char buf[16];
+        auto end = PrintFloat( buf, buf+16, 100.f * count / iptotal, 2 );
+        memcpy( end, "%", 2 );
+        TextFocused( "Selected:", buf );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Time:", TimeToString( count * worker.GetSamplingPeriod() ) );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Sample count:", RealToString( count ) );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Lines:", RealToString( numLines ) );
+        ImGui::EndChild();
+    }
 }
 
 static int PrintHexBytes( char* buf, const uint8_t* bytes, size_t len )
@@ -1391,13 +1534,13 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
         }
         ImGui::SameLine();
     }
-    SmallCheckbox( ICON_FA_SEARCH_LOCATION " Relative locations", &m_asmRelative );
+    SmallCheckbox( ICON_FA_SEARCH_LOCATION " Relative loc.", &m_asmRelative );
     if( !m_sourceFiles.empty() )
     {
         ImGui::SameLine();
         ImGui::Spacing();
         ImGui::SameLine();
-        SmallCheckbox( ICON_FA_FILE_IMPORT " Source locations", &m_asmShowSourceLocation );
+        SmallCheckbox( ICON_FA_FILE_IMPORT " Source loc.", &m_asmShowSourceLocation );
     }
     ImGui::SameLine();
     ImGui::Spacing();
@@ -1407,6 +1550,10 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
     ImGui::Spacing();
     ImGui::SameLine();
     SmallCheckbox( ICON_FA_SHARE " Jumps", &m_showJumps );
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+    if( SmallCheckbox( "AT&T", &m_atnt ) ) Disassemble( m_baseAddr, worker );
 
     if( m_cpuArch == CpuArchX64 || m_cpuArch == CpuArchX86 )
     {
@@ -1443,7 +1590,91 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
         SmallCheckbox( ICON_FA_TRUCK_LOADING " Latency", &m_showLatency );
     }
 
-    ImGui::BeginChild( "##asmView", ImVec2( 0, 0 ), true, ImGuiWindowFlags_NoMove );
+#ifndef TRACY_NO_FILESELECTOR
+    ImGui::SameLine();
+    ImGui::Spacing();
+    ImGui::SameLine();
+    if( ImGui::SmallButton( ICON_FA_FILE_IMPORT " Save" ) )
+    {
+        nfdchar_t* fn;
+        auto res = NFD_SaveDialog( "asm", nullptr, &fn );
+        if( res == NFD_OKAY )
+        {
+            FILE* f = nullptr;
+            const auto sz = strlen( fn );
+            if( sz < 5 || memcmp( fn + sz - 4, ".asm", 4 ) != 0 )
+            {
+                char tmp[1024];
+                sprintf( tmp, "%s.asm", fn );
+                f = fopen( tmp, "wb" );
+            }
+            else
+            {
+                f = fopen( fn, "wb" );
+            }
+            if( f )
+            {
+                char tmp[16];
+                auto sym = worker.GetSymbolData( m_symAddr );
+                assert( sym );
+                const char* symName;
+                if( sym->isInline )
+                {
+                    auto parent = worker.GetSymbolData( m_baseAddr );
+                    if( parent )
+                    {
+                        symName = worker.GetString( parent->name );
+                    }
+                    else
+                    {
+                        sprintf( tmp, "0x%" PRIx64, m_baseAddr );
+                        symName = tmp;
+                    }
+                }
+                else
+                {
+                    symName = worker.GetString( sym->name );
+                }
+                fprintf( f, "; Tracy Profiler disassembly of symbol %s [%s]\n\n", symName, worker.GetCaptureProgram() );
+                if( !m_atnt ) fprintf( f, ".intel_syntax\n\n" );
+
+                for( auto& v : m_asm )
+                {
+                    auto it = m_locMap.find( v.addr );
+                    if( it != m_locMap.end() )
+                    {
+                        fprintf( f, ".L%" PRIu32 ":\n", it->second );
+                    }
+                    bool hasJump = false;
+                    if( v.jumpAddr != 0 )
+                    {
+                        auto lit = m_locMap.find( v.jumpAddr );
+                        if( lit != m_locMap.end() )
+                        {
+                            fprintf( f, "\t%-*s.L%" PRIu32 "\n", m_maxMnemonicLen, v.mnemonic.c_str(), lit->second );
+                            hasJump = true;
+                        }
+                    }
+                    if( !hasJump )
+                    {
+                        if( v.operands.empty() )
+                        {
+                            fprintf( f, "\t%s\n", v.mnemonic.c_str() );
+                        }
+                        else
+                        {
+                            fprintf( f, "\t%-*s%s\n", m_maxMnemonicLen, v.mnemonic.c_str(), v.operands.c_str() );
+                        }
+                    }
+                }
+                fclose( f );
+            }
+        }
+    }
+#endif
+
+    const float bottom = m_asmSampleSelect.empty() ? 0 : ImGui::GetFrameHeight();
+    ImGui::BeginChild( "##asmView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove );
     if( m_font ) ImGui::PushFont( m_font );
 
     int maxAddrLen;
@@ -1535,6 +1766,10 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
                         ImGui::SameLine();
                         sprintf( tmp, "(0x%" PRIx64 ")", v.first );
                         TextDisabledUnformatted( tmp );
+                        auto lit = m_locMap.find( v.first );
+                        assert( lit != m_locMap.end() );
+                        sprintf( tmp, ".L%" PRIu32, lit->second );
+                        TextFocused( "Jump label:", tmp );
                         uint32_t srcline;
                         const auto srcidx = worker.GetLocationForAddress( v.first, srcline );
                         if( srcline != 0 )
@@ -1735,10 +1970,50 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
     if( m_font ) ImGui::PopFont();
     ImGui::EndChild();
 
+    if( !m_asmSampleSelect.empty() )
+    {
+        uint32_t count = 0;
+        uint32_t numLines = 0;
+        for( auto& idx : m_asmSampleSelect )
+        {
+            auto it = ipcount.find( m_asm[idx].addr );
+            if( it != ipcount.end() )
+            {
+                count += it->second;
+                numLines++;
+            }
+        }
+
+        ImGui::BeginChild( "##asmSelect" );
+        if( ImGui::SmallButton( ICON_FA_TIMES ) )
+        {
+            m_asmSampleSelect.clear();
+            m_asmGroupSelect = -1;
+        }
+        ImGui::SameLine();
+        char buf[16];
+        auto end = PrintFloat( buf, buf+16, 100.f * count / iptotal, 2 );
+        memcpy( end, "%", 2 );
+        TextFocused( "Selected:", buf );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Time:", TimeToString( count * worker.GetSamplingPeriod() ) );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Sample count:", RealToString( count ) );
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        TextFocused( "Lines:", RealToString( numLines ) );
+        ImGui::EndChild();
+    }
+
     return jumpOut;
 }
 
-static bool PrintPercentage( float val )
+static bool PrintPercentage( float val, uint32_t col = 0xFFFFFFFF )
 {
     const auto ty = ImGui::GetFontSize();
     auto draw = ImGui::GetWindowDrawList();
@@ -1757,7 +2032,7 @@ static bool PrintPercentage( float val )
     memcpy( buf + 7 - sz, tmp, sz+1 );
 
     draw->AddRectFilled( wpos, wpos + ImVec2( val * tw / 100, ty+1 ), 0xFF444444 );
-    DrawTextContrast( draw, wpos + ImVec2( htw, 0 ), 0xFFFFFFFF, buf );
+    DrawTextContrast( draw, wpos + ImVec2( htw, 0 ), col, buf );
 
     ImGui::ItemSize( ImVec2( stw * 7, ty ), 0 );
     return ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect( wpos, wpos + ImVec2( stw * 7, ty ) );
@@ -1791,6 +2066,7 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
         draw->AddRectFilled( wpos, wpos + ImVec2( w, ty+1 ), 0xFF333322 );
     }
 
+    bool mouseHandled = false;
     if( iptotal != 0 )
     {
         if( ipcnt == 0 )
@@ -1800,7 +2076,8 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
         }
         else
         {
-            if( PrintPercentage( 100.f * ipcnt / iptotal ) )
+            auto sit = m_srcSampleSelect.find( lineNum );
+            if( PrintPercentage( 100.f * ipcnt / iptotal, sit == m_srcSampleSelect.end() ? 0xFFFFFFFF : 0xFF8888FF ) )
             {
                 if( m_font ) ImGui::PopFont();
                 ImGui::BeginTooltip();
@@ -1808,6 +2085,62 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
                 TextFocused( "Sample count:", RealToString( ipcnt ) );
                 ImGui::EndTooltip();
                 if( m_font ) ImGui::PushFont( m_font );
+
+                if( ImGui::IsMouseClicked( 0 ) )
+                {
+                    mouseHandled = true;
+                    auto& io = ImGui::GetIO();
+                    if( io.KeyCtrl )
+                    {
+                        m_srcGroupSelect = lineNum;
+                        if( sit == m_srcSampleSelect.end() )
+                        {
+                            m_srcSampleSelect.emplace( lineNum );
+                        }
+                        else
+                        {
+                            m_srcSampleSelect.erase( sit );
+                        }
+                    }
+                    else if( io.KeyShift )
+                    {
+                        m_srcSampleSelect.clear();
+                        if( m_srcGroupSelect == -1 )
+                        {
+                            m_srcGroupSelect = lineNum;
+                            m_srcSampleSelect.insert( lineNum );
+                        }
+                        else
+                        {
+                            if( lineNum < m_srcGroupSelect )
+                            {
+                                for( int i=lineNum; i<=m_srcGroupSelect; i++ )
+                                {
+                                    m_srcSampleSelect.insert( i );
+                                }
+                            }
+                            else
+                            {
+                                for( int i=m_srcGroupSelect; i<=lineNum; i++ )
+                                {
+                                    m_srcSampleSelect.insert( i );
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        m_srcSampleSelect.clear();
+                        m_srcSampleSelect.insert( lineNum );
+                        m_srcGroupSelect = lineNum;
+                    }
+                }
+                else if( ImGui::IsMouseClicked( 1 ) )
+                {
+                    mouseHandled = true;
+                    m_srcSampleSelect.clear();
+                    m_srcGroupSelect = -1;
+                }
             }
             draw->AddLine( wpos + ImVec2( 0, 1 ), wpos + ImVec2( 0, ty-2 ), GetHotnessColor( ipcnt, ipmax ) );
         }
@@ -1881,7 +2214,7 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
     if( match > 0 && ImGui::IsWindowHovered() && ImGui::IsMouseHoveringRect( wpos, wpos + ImVec2( w, ty+1 ) ) )
     {
         draw->AddRectFilled( wpos, wpos + ImVec2( w, ty+1 ), 0x11FFFFFF );
-        if( ImGui::IsMouseClicked( 0 ) || ImGui::IsMouseClicked( 1 ) )
+        if( !mouseHandled && ( ImGui::IsMouseClicked( 0 ) || ImGui::IsMouseClicked( 1 ) ) )
         {
             m_displayMode = DisplayMixed;
             SelectLine( lineNum, worker, ImGui::IsMouseClicked( 1 ) );
@@ -1923,7 +2256,9 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
         }
         else
         {
-            if( PrintPercentage( 100.f * ipcnt / iptotal ) )
+            const auto idx = &line - m_asm.data();
+            auto sit = m_asmSampleSelect.find( idx );
+            if( PrintPercentage( 100.f * ipcnt / iptotal, sit == m_asmSampleSelect.end() ? 0xFFFFFFFF : 0xFF8888FF ) )
             {
                 if( m_font ) ImGui::PopFont();
                 ImGui::BeginTooltip();
@@ -1931,9 +2266,62 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
                 TextFocused( "Sample count:", RealToString( ipcnt ) );
                 ImGui::EndTooltip();
                 if( m_font ) ImGui::PushFont( m_font );
+
+                if( ImGui::IsMouseClicked( 0 ) )
+                {
+                    auto& io = ImGui::GetIO();
+                    if( io.KeyCtrl )
+                    {
+                        m_asmGroupSelect = idx;
+                        if( sit == m_asmSampleSelect.end() )
+                        {
+                            m_asmSampleSelect.emplace( idx );
+                        }
+                        else
+                        {
+                            m_asmSampleSelect.erase( sit );
+                        }
+                    }
+                    else if( io.KeyShift )
+                    {
+                        m_asmSampleSelect.clear();
+                        if( m_asmGroupSelect == -1 )
+                        {
+                            m_asmGroupSelect = idx;
+                            m_asmSampleSelect.insert( idx );
+                        }
+                        else
+                        {
+                            if( idx < m_asmGroupSelect )
+                            {
+                                for( int i=idx; i<=m_asmGroupSelect; i++ )
+                                {
+                                    m_asmSampleSelect.insert( i );
+                                }
+                            }
+                            else
+                            {
+                                for( int i=m_asmGroupSelect; i<=idx; i++ )
+                                {
+                                    m_asmSampleSelect.insert( i );
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        m_asmSampleSelect.clear();
+                        m_asmSampleSelect.insert( idx );
+                        m_asmGroupSelect = idx;
+                    }
+                }
+                else if( ImGui::IsMouseClicked( 1 ) )
+                {
+                    m_asmSampleSelect.clear();
+                    m_asmGroupSelect = -1;
+                }
             }
             draw->AddLine( wpos + ImVec2( 0, 1 ), wpos + ImVec2( 0, ty-2 ), GetHotnessColor( ipcnt, ipmax ) );
-
         }
         ImGui::SameLine( 0, ty );
     }
@@ -2136,12 +2524,27 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
         }
     }
 
-    const auto asmIdx = &line - m_asm.data();
-
     const auto msz = line.mnemonic.size();
     memcpy( buf, line.mnemonic.c_str(), msz );
     memset( buf+msz, ' ', m_maxMnemonicLen-msz );
-    memcpy( buf+m_maxMnemonicLen, line.operands.c_str(), line.operands.size() + 1 );
+    bool hasJump = false;
+    if( line.jumpAddr != 0 )
+    {
+        auto lit = m_locMap.find( line.jumpAddr );
+        if( lit != m_locMap.end() )
+        {
+            char tmp[64];
+            sprintf( tmp, ".L%" PRIu32, lit->second );
+            strcpy( buf+m_maxMnemonicLen, tmp );
+            hasJump = true;
+        }
+    }
+    if( !hasJump )
+    {
+        memcpy( buf+m_maxMnemonicLen, line.operands.c_str(), line.operands.size() + 1 );
+    }
+
+    const auto asmIdx = &line - m_asm.data();
     if( asmIdx == m_asmSelected )
     {
         TextColoredUnformatted( ImVec4( 1, 0.25f, 0.25f, 1 ), buf );
@@ -2365,6 +2768,13 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
             m_asmSelected = -1;
             ResetAsm();
         }
+    }
+
+    auto lit = m_locMap.find( line.addr );
+    if( lit != m_locMap.end() )
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled( "; .L%" PRIu32, lit->second );
     }
 
     if( line.regData[0] != 0 )

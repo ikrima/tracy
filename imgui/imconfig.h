@@ -13,17 +13,6 @@
 
 #pragma once
 
-//========================================================================================================================
-#pragma region ImGuiUX Config
-
-#define IMGUIUIX_FEATURE_ADOBESPECTRUM 1
-#define IMGUIUIX_FEATURE_NODEDITOR     0
-#define IMGUIUX_SHAREDLIB              0
-#define IMGUIUX_FEATURE_UE4            0
-
-#pragma endregion
-//========================================================================================================================
-
 //---- Define assertion handler. Defaults to calling assert().
 // If your macro uses multiple statements, make sure is enclosed in a 'do { .. } while (0)' block so it can be used as a single statement.
 //#define IM_ASSERT(_EXPR)  MyAssert(_EXPR)
@@ -54,7 +43,7 @@
 //#define IMGUI_DISABLE_DEFAULT_ALLOCATORS                  // Don't implement default allocators calling malloc()/free() to avoid linking with them. You will need to call ImGui::SetAllocatorFunctions().
 
 //---- Include imgui_user.h at the end of imgui.h as a convenience
-#define IMGUI_INCLUDE_IMGUI_USER_H
+//#define IMGUI_INCLUDE_IMGUI_USER_H
 
 //---- Pack colors to BGRA8 instead of RGBA8 (to avoid converting from one to another)
 //#define IMGUI_USE_BGRA_PACKED_COLOR

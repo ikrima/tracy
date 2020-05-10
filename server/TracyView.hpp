@@ -297,7 +297,7 @@ private:
     std::string m_filename;
     bool m_staticView;
     bool m_pause;
-    bool m_forceConnectionPopup = false;
+    DecayValue<bool> m_forceConnectionPopup = false;
 
     ViewData m_vd;
 
@@ -389,6 +389,7 @@ private:
 
     std::unique_ptr<SourceView> m_sourceView;
     const char* m_sourceViewFile;
+    bool m_uarchSet = false;
 
     ImFont* m_smallFont;
     ImFont* m_bigFont;

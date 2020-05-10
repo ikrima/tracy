@@ -201,9 +201,6 @@
     <ClCompile Include="..\..\..\server\TracyMicroArchitecture.cpp">
       <Filter>server</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\..\imgui\ImGuiUX\AdobeSpectrum\spectrum.cpp">
-      <Filter>imgui</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\..\common\tracy_lz4.hpp">
@@ -493,15 +490,6 @@
     </ClInclude>
     <ClInclude Include="..\..\..\server\TracyMicroArchitecture.hpp">
       <Filter>server</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\imgui\ImGuiUX\AdobeSpectrum\spectrum.h">
-      <Filter>imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\imgui\imgui_user.h">
-      <Filter>imgui</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\..\imgui\imguix.h">
-      <Filter>imgui</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>

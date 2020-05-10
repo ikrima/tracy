@@ -209,6 +209,8 @@ private:
         int64_t lastTime = 0;
         uint64_t frameOffset = 0;
         CpuArchitecture cpuArch = CpuArchUnknown;
+        uint32_t cpuId = 0;
+        char cpuManufacturer[13];
 
         unordered_flat_map<uint64_t, const char*> strings;
         Vector<const char*> stringData;
@@ -375,6 +377,8 @@ public:
     int64_t GetResolution() const { return m_resolution; }
     uint64_t GetPid() const { return m_pid; };
     CpuArchitecture GetCpuArch() const { return m_data.cpuArch; }
+    uint32_t GetCpuId() const { return m_data.cpuId; }
+    const char* GetCpuManufacturer() const { return m_data.cpuManufacturer; }
 
     std::shared_mutex& GetDataLock() { return m_data.lock; }
     size_t GetFrameCount( const FrameData& fd ) const { return fd.frames.size(); }

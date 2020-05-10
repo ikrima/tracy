@@ -129,6 +129,8 @@ public:
     SourceView( ImFont* font );
     ~SourceView();
 
+    void SetCpuId( uint32_t cpuid );
+
     void OpenSource( const char* fileName, int line, const View& view );
     void OpenSymbol( const char* fileName, int line, uint64_t baseAddr, uint64_t symAddr, const Worker& worker, const View& view );
     void Render( const Worker& worker, const View& view );
@@ -199,10 +201,12 @@ private:
     bool m_asmShowSourceLocation;
     bool m_calcInlineStats;
     uint8_t m_maxAsmBytes;
+    bool m_atnt;
 
     std::vector<Line> m_lines;
     std::vector<AsmLine> m_asm;
 
+    unordered_flat_map<uint64_t, uint32_t> m_locMap;
     unordered_flat_map<uint64_t, JumpData> m_jumpTable;
     unordered_flat_set<uint64_t> m_jumpOut;
     int m_maxJumpLevel;
@@ -222,6 +226,11 @@ private:
     int m_selMicroArch;
     int m_idxMicroArch;
     bool m_showLatency;
+
+    unordered_flat_set<uint32_t> m_asmSampleSelect;
+    unordered_flat_set<uint32_t> m_srcSampleSelect;
+    uint32_t m_asmGroupSelect = -1;
+    uint32_t m_srcGroupSelect = -1;
 };
 
 }
