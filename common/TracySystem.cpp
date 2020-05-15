@@ -7,7 +7,7 @@
 # endif
 #endif
 #ifdef _MSC_VER
-#  pragma warning(disable:4996)
+#  pragma warning(disable:4996 4668)
 #endif
 #if defined _WIN32 || defined __CYGWIN__
 #  include <windows.h>

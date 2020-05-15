@@ -16,6 +16,11 @@
 #include "../common/TracyMutex.hpp"
 #include "../common/TracyProtocol.hpp"
 
+#if defined(_MSC_VER)
+__pragma(warning(push))
+__pragma(warning(disable:4668))
+#endif
+
 #if defined _WIN32 || defined __CYGWIN__
 #  include <intrin.h>
 #endif
@@ -675,5 +680,9 @@ private:
 };
 
 };
+
+#if defined(_MSC_VER)
+__pragma(warning(pop))
+#endif
 
 #endif
