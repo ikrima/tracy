@@ -952,6 +952,11 @@ std::atomic<ThreadNameData*>& GetThreadNameData() { return GetProfilerData().thr
 TRACY_API LuaZoneState& GetLuaZoneState() { return GetProfilerThreadData().luaZoneState; }
 #  endif
 
+namespace
+{
+    const auto& __profiler_init = GetProfiler();
+}
+
 #else
 TRACY_API void InitRPMallocThread()
 {
@@ -1718,7 +1723,7 @@ void Profiler::ClearQueues( moodycamel::ConsumerToken& token )
 {
     for(;;)
     {
-        const auto sz = GetQueue().try_dequeue_bulk_single( token, [](auto){}, []( QueueItem* item, size_t sz ) { assert( sz > 0 ); while( sz-- > 0 ) FreeAssociatedMemory( *item++ ); } );
+        const auto sz = GetQueue().try_dequeue_bulk_single( token, [](const uint64_t&){}, []( QueueItem* item, size_t sz ) { assert( sz > 0 ); while( sz-- > 0 ) FreeAssociatedMemory( *item++ ); } );
         if( sz == 0 ) break;
     }
 
@@ -1773,7 +1778,7 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
             while( sz-- > 0 )
             {
                 uint64_t ptr;
-                const auto idx = MemRead<uint8_t>( &item->hdr.idx );
+                auto idx = MemRead<uint8_t>( &item->hdr.idx );
                 if( idx < (int)QueueType::Terminate )
                 {
                     switch( (QueueType)idx )
@@ -1809,12 +1814,16 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         ptr = MemRead<uint64_t>( &item->zoneBegin.srcloc );
                         SendSourceLocationPayload( ptr );
                         tracy_free( (void*)ptr );
+                        idx++;
+                        MemWrite( &item->hdr.idx, idx );
                         break;
                     }
                     case QueueType::Callstack:
                         ptr = MemRead<uint64_t>( &item->callstack.ptr );
                         SendCallstackPayload( ptr );
                         tracy_free( (void*)ptr );
+                        idx++;
+                        MemWrite( &item->hdr.idx, idx );
                         break;
                     case QueueType::CallstackAlloc:
                         ptr = MemRead<uint64_t>( &item->callstackAlloc.nativePtr );
@@ -1827,6 +1836,8 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         ptr = MemRead<uint64_t>( &item->callstackAlloc.ptr );
                         SendCallstackAlloc( ptr );
                         tracy_free( (void*)ptr );
+                        idx++;
+                        MemWrite( &item->hdr.idx, idx );
                         break;
                     case QueueType::CallstackSample:
                     {
@@ -1837,6 +1848,8 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         int64_t dt = t - refCtx;
                         refCtx = t;
                         MemWrite( &item->callstackSample.time, dt );
+                        idx++;
+                        MemWrite( &item->hdr.idx, idx );
                         break;
                     }
                     case QueueType::FrameImage:
@@ -1847,6 +1860,8 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         const auto csz = size_t( w * h / 2 );
                         SendLongString( ptr, (const char*)ptr, csz, QueueType::FrameImageData );
                         tracy_free( (void*)ptr );
+                        idx++;
+                        MemWrite( &item->hdr.idx, idx );
                         break;
                     }
                     case QueueType::ZoneBegin:
@@ -2034,7 +2049,7 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
         while( item != end )
         {
             uint64_t ptr;
-            const auto idx = MemRead<uint8_t>( &item->hdr.idx );
+            auto idx = MemRead<uint8_t>( &item->hdr.idx );
             if( idx < (int)QueueType::Terminate )
             {
                 switch( (QueueType)idx )
@@ -2043,6 +2058,8 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
                     ptr = MemRead<uint64_t>( &item->callstackMemory.ptr );
                     SendCallstackPayload( ptr );
                     tracy_free( (void*)ptr );
+                    idx++;
+                    MemWrite( &item->hdr.idx, idx );
                     break;
                 case QueueType::LockWait:
                 case QueueType::LockSharedWait:
@@ -2566,7 +2583,7 @@ void Profiler::CalibrateDelay()
     int left = Events;
     while( left != 0 )
     {
-        const auto sz = GetQueue().try_dequeue_bulk_single( token, [](auto){}, [](auto, auto){} );
+        const auto sz = GetQueue().try_dequeue_bulk_single( token, [](const uint64_t&){}, [](QueueItem* item, size_t sz){} );
         assert( sz > 0 );
         left -= (int)sz;
     }
@@ -3012,6 +3029,23 @@ TRACY_API void ___tracy_emit_zone_name( TracyCZoneCtx ctx, const char* txt, size
     {
         TracyLfqPrepareC( tracy::QueueType::ZoneName );
         tracy::MemWrite( &item->zoneText.text, (uint64_t)ptr );
+        TracyLfqCommitC;
+    }
+}
+
+TRACY_API void ___tracy_emit_zone_value( TracyCZoneCtx ctx, uint64_t value )
+{
+    if( !ctx.active ) return;
+#ifndef TRACY_NO_VERIFY
+    {
+        TracyLfqPrepareC( tracy::QueueType::ZoneValidation );
+        tracy::MemWrite( &item->zoneValidation.id, ctx.id );
+        TracyLfqCommitC;
+    }
+#endif
+    {
+        TracyLfqPrepareC( tracy::QueueType::ZoneValue );
+        tracy::MemWrite( &item->zoneValue.value, value );
         TracyLfqCommitC;
     }
 }

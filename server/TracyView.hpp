@@ -92,6 +92,8 @@ public:
 
     const char* SourceSubstitution( const char* srcFile ) const;
 
+    void ShowSampleParents( uint64_t symAddr ) { m_sampleParents.symAddr = symAddr; m_sampleParents.sel = 0; }
+
 private:
     enum class Namespace : uint8_t
     {
@@ -240,6 +242,7 @@ private:
     int64_t GetZoneChildTime( const ZoneEvent& zone );
     int64_t GetZoneChildTime( const GpuEvent& zone );
     int64_t GetZoneChildTimeFast( const ZoneEvent& zone );
+    int64_t GetZoneChildTimeFastClamped( const ZoneEvent& zone, uint64_t t0, uint64_t t1 );
     int64_t GetZoneSelfTime( const ZoneEvent& zone );
     int64_t GetZoneSelfTime( const GpuEvent& zone );
     bool GetZoneRunningTime( const ContextSwitch* ctx, const ZoneEvent& ev, int64_t& time, uint64_t& cnt );
@@ -329,6 +332,7 @@ private:
     DecayValue<uint64_t> m_drawThreadMigrations = 0;
     DecayValue<uint64_t> m_drawThreadHighlight = 0;
     Annotation* m_selectedAnnotation = nullptr;
+    bool m_reactToCrash = false;
 
     Region m_highlight;
     Region m_highlightZoom;
@@ -367,6 +371,7 @@ private:
     int m_showCallstackFrameAddress = 0;
     bool m_showUnknownFrames = true;
     bool m_statSeparateInlines = false;
+    bool m_statShowAddress = false;
     bool m_groupChildrenLocations = false;
     bool m_allocTimeRelativeToZone = true;
     bool m_ctxSwitchTimeRelativeToZone = true;
@@ -425,7 +430,7 @@ private:
     UserData m_userData;
 
     bool m_reconnectRequested = false;
-    bool m_firstFrame = true;
+    int m_firstFrame = 10;
 
     std::vector<SourceRegex> m_sourceSubstitutions;
     bool m_sourceRegexValid = true;

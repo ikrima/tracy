@@ -16,12 +16,19 @@ enum class QueueType : uint8_t
     MessageColorCallstack,
     MessageAppInfo,
     ZoneBeginAllocSrcLoc,
+    ZoneBeginAllocSrcLocLean,
     ZoneBeginAllocSrcLocCallstack,
+    ZoneBeginAllocSrcLocCallstackLean,
     CallstackMemory,
+    CallstackMemoryLean,
     Callstack,
+    CallstackLean,
     CallstackAlloc,
+    CallstackAllocLean,
     CallstackSample,
+    CallstackSampleLean,
     FrameImage,
+    FrameImageLean,
     ZoneBegin,
     ZoneBeginCallstack,
     ZoneEnd,
@@ -52,6 +59,7 @@ enum class QueueType : uint8_t
     Crash,
     CrashReport,
     ZoneValidation,
+    ZoneValue,
     FrameMarkMsg,
     FrameMarkMsgStart,
     FrameMarkMsgEnd,
@@ -96,9 +104,13 @@ struct QueueThreadContext
     uint64_t thread;
 };
 
-struct QueueZoneBegin
+struct QueueZoneBeginLean
 {
     int64_t time;
+};
+
+struct QueueZoneBegin : public QueueZoneBeginLean
+{
     uint64_t srcloc;    // ptr
 };
 
@@ -112,6 +124,11 @@ struct QueueZoneValidation
     uint32_t id;
 };
 
+struct QueueZoneValue
+{
+    uint64_t value;
+};
+
 struct QueueStringTransfer
 {
     uint64_t ptr;
@@ -123,13 +140,17 @@ struct QueueFrameMark
     uint64_t name;      // ptr
 };
 
-struct QueueFrameImage
+struct QueueFrameImageLean
 {
-    uint64_t image;     // ptr
     uint64_t frame;
     uint16_t w;
     uint16_t h;
     uint8_t flip;
+};
+
+struct QueueFrameImage : public QueueFrameImageLean
+{
+    uint64_t image;     // ptr
 };
 
 struct QueueSourceLocation
@@ -237,6 +258,14 @@ struct QueueMessageColor : public QueueMessage
     uint8_t b;
 };
 
+// Don't change order, only add new entries at the end, this is also used on trace dumps!
+enum class GpuContextType : uint8_t
+{
+    Invalid,
+    OpenGl,
+    Vulkan
+};
+
 struct QueueGpuNewContext
 {
     int64_t cpuTime;
@@ -245,6 +274,7 @@ struct QueueGpuNewContext
     float period;
     uint8_t context;
     uint8_t accuracyBits;
+    GpuContextType type;
 };
 
 struct QueueGpuZoneBegin
@@ -302,10 +332,14 @@ struct QueueCallstackAlloc
     uint64_t nativePtr;
 };
 
-struct QueueCallstackSample
+struct QueueCallstackSampleLean
 {
     int64_t time;
     uint64_t thread;
+};
+
+struct QueueCallstackSample : public QueueCallstackSampleLean
+{
     uint64_t ptr;
 };
 
@@ -417,11 +451,14 @@ struct QueueItem
     {
         QueueThreadContext threadCtx;
         QueueZoneBegin zoneBegin;
+        QueueZoneBeginLean zoneBeginLean;
         QueueZoneEnd zoneEnd;
         QueueZoneValidation zoneValidation;
+        QueueZoneValue zoneValue;
         QueueStringTransfer stringTransfer;
         QueueFrameMark frameMark;
         QueueFrameImage frameImage;
+        QueueFrameImage frameImageLean;
         QueueSourceLocation srcloc;
         QueueZoneText zoneText;
         QueueLockAnnounce lockAnnounce;
@@ -444,6 +481,7 @@ struct QueueItem
         QueueCallstack callstack;
         QueueCallstackAlloc callstackAlloc;
         QueueCallstackSample callstackSample;
+        QueueCallstackSampleLean callstackSampleLean;
         QueueCallstackFrameSize callstackFrameSize;
         QueueCallstackFrame callstackFrame;
         QueueSymbolInformation symbolInformation;
@@ -471,13 +509,20 @@ static constexpr size_t QueueDataSize[] = {
     sizeof( QueueHeader ) + sizeof( QueueMessage ),         // callstack
     sizeof( QueueHeader ) + sizeof( QueueMessageColor ),    // callstack
     sizeof( QueueHeader ) + sizeof( QueueMessage ),         // app info
-    sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),       // allocated source location
-    sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),       // allocated source location, callstack
-    sizeof( QueueHeader ) + sizeof( QueueCallstackMemory ),
-    sizeof( QueueHeader ) + sizeof( QueueCallstack ),
-    sizeof( QueueHeader ) + sizeof( QueueCallstackAlloc ),
-    sizeof( QueueHeader ) + sizeof( QueueCallstackSample ),
-    sizeof( QueueHeader ) + sizeof( QueueFrameImage ),
+    sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),       // allocated source location, not for network transfer
+    sizeof( QueueHeader ) + sizeof( QueueZoneBeginLean ),   // lean allocated source location
+    sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),       // allocated source location, callstack, not for network transfer
+    sizeof( QueueHeader ) + sizeof( QueueZoneBeginLean ),   // lean allocated source location, callstack
+    sizeof( QueueHeader ) + sizeof( QueueCallstackMemory ), // not for network transfer
+    sizeof( QueueHeader ),                                  // lean callstack memory
+    sizeof( QueueHeader ) + sizeof( QueueCallstack ),       // not for network transfer
+    sizeof( QueueHeader ),                                  // lean callstack
+    sizeof( QueueHeader ) + sizeof( QueueCallstackAlloc ),  // not for network transfer
+    sizeof( QueueHeader ),                                  // lean callstack alloc
+    sizeof( QueueHeader ) + sizeof( QueueCallstackSample ), // not for network transfer
+    sizeof( QueueHeader ) + sizeof( QueueCallstackSampleLean ),
+    sizeof( QueueHeader ) + sizeof( QueueFrameImage ),      // not for network transfer
+    sizeof( QueueHeader ) + sizeof( QueueFrameImageLean ),
     sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),
     sizeof( QueueHeader ) + sizeof( QueueZoneBegin ),       // callstack
     sizeof( QueueHeader ) + sizeof( QueueZoneEnd ),
@@ -509,6 +554,7 @@ static constexpr size_t QueueDataSize[] = {
     sizeof( QueueHeader ),                                  // crash
     sizeof( QueueHeader ) + sizeof( QueueCrashReport ),
     sizeof( QueueHeader ) + sizeof( QueueZoneValidation ),
+    sizeof( QueueHeader ) + sizeof( QueueZoneValue ),
     sizeof( QueueHeader ) + sizeof( QueueFrameMark ),       // continuous frames
     sizeof( QueueHeader ) + sizeof( QueueFrameMark ),       // start
     sizeof( QueueHeader ) + sizeof( QueueFrameMark ),       // end
@@ -551,6 +597,6 @@ static_assert( sizeof( QueueDataSize ) / sizeof( size_t ) == (uint8_t)QueueType:
 static_assert( sizeof( void* ) <= sizeof( uint64_t ), "Pointer size > 8 bytes" );
 static_assert( sizeof( void* ) == sizeof( uintptr_t ), "Pointer size != uintptr_t" );
 
-};
+}
 
 #endif

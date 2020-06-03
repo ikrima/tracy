@@ -18,6 +18,7 @@
 \usepackage[os=win]{menukeys}
 \usepackage{xfrac}
 \usepackage[euler]{textgreek}
+\usepackage{nameref}
 
 \usepackage[hmarginratio=1:1,top=32mm,columnsep=20pt]{geometry} % Document margins
 \geometry{a4paper,textwidth=6.5in,hmarginratio=1:1,
@@ -93,11 +94,28 @@
 \url{https://github.com/wolfpld/tracy}
 \end{titlepage}
 
+\section*{Quick overview}
+
+Hello and welcome to the Tracy Profiler user manual! Here you will find all the information you need to start using the profiler. This manual has the following layout:
+
+\begin{itemize}
+\item Chapter~\ref{quicklook}, \emph{\nameref{quicklook}}, gives a short description of what Tracy is and how it works.
+\item Chapter~\ref{firststeps}, \emph{\nameref{firststeps}}, shows how the profiler can be integrated into your application, and how to build the graphical user interface (section~\ref{buildingserver}). At this point you will be able to establish a connection from the profiler to your application.
+\item Chapter~\ref{client}, \emph{\nameref{client}}, provides information on how to instrument your application, in order to retrieve useful profiling data.
+\item Chapter~\ref{capturing}, \emph{\nameref{capturing}}, goes into more detail on how the profiling information can be captured and stored on disk.
+\item Chapter~\ref{analyzingdata}, \emph{\nameref{analyzingdata}}, guides you through the graphical user interface of the profiler.
+\item Chapter~\ref{importingdata}, \emph{\nameref{importingdata}}, documents how to import data from other profilers.
+\item Chapter~\ref{configurationfiles}, \emph{\nameref{configurationfiles}}, gives information on the profiler settings.
+\end{itemize}
+
+\newpage
+
 \tableofcontents
 
 \newpage
 
 \section{A quick look at Tracy Profiler}
+\label{quicklook}
 
 Tracy is a real-time, nanosecond resolution \emph{hybrid frame and sampling profiler} that can be used for remote or embedded telemetry of games and other applications. It can profile CPU (C, C++11, Lua), GPU (OpenGL, Vulkan) and memory. It also can monitor locks held by threads and show where contention does happen.
 
@@ -184,6 +202,10 @@ Here you can see why it is important to use a high precision timer. While there 
 
 Tracy is aimed at understanding the inner workings of a tight loop of a game (or any other kind of an interactive application). That's why it slices the execution time of a program using the \emph{frame}\footnote{A frame is used to describe a single image displayed on the screen by the game (or any other program), preferably 60 times per second to achieve smooth animation. You can also think about physics update frames, audio processing frames, etc.} as a basic work-unit\footnote{Frame usage is not required. See section~\ref{markingframes} for more information.}. The most interesting frames are the ones that took longer than the allocated time, producing visible hitches in the on-screen animation. Tracy allows inspection of such misbehavior.
 
+\subsection{Sampling profiler}
+
+Tracy is able to periodically sample what the profiled application is doing, which gives you detailed performance information at the source line/assembly instruction level. This can give you deep understanding of how the program is executed by the processor. Using this information you can get a coarse view at the call stacks, fine-tune your algorithms, or even 'steal' an optimization performed by one compiler and make it available for the others.
+
 \subsection{Remote or embedded telemetry}
 
 Tracy uses the client-server model to enable a wide range of use-cases (see figure~\ref{clientserver}). For example, a game on a mobile phone may be profiled over the wireless connection, with the profiler running on a desktop computer. Or you can run the client and server on the same machine, using a localhost connection. It is also possible to embed the visualization front-end in the profiled application, making the profiling self-contained\footnote{See section~\ref{embeddingserver} for guidelines.}.
@@ -240,8 +262,6 @@ You may wonder, why should you use Tracy, when there are so many other profilers
 \item Tracy doesn't require manual markup of interesting areas in your code to start profiling. You may rely on automated call stack sampling and add instrumentation later, when you know where it's needed.
 \item Tracy provides mapping of source code to the assembly, with detailed information about cost of executing each instruction on the CPU.
 \end{itemize}
-
-With all that being said, Tracy may not be the right choice for you, if you need to profile games targetting PS4, Xbox, or other consoles behind a NDA wall.
 
 \subsection{Performance impact}
 \label{perfimpact}
@@ -311,6 +331,7 @@ Tracy can be found at the following web addresses:
 You may be also interested in a Bitbucket mirror: \url{https://bitbucket.org/wolfpld/tracy}.
 
 \section{First steps}
+\label{firststeps}
 
 Tracy Profiler supports  MSVC, gcc and clang. A reasonably recent version of the compiler is needed, due to C++11 requirement. The following platforms are confirmed to be working (this is not a complete list):
 
@@ -324,6 +345,15 @@ Tracy Profiler supports  MSVC, gcc and clang. A reasonably recent version of the
 \item WSL (x64)
 \item OSX (x64)
 \item iOS (ARM, ARM64)
+\end{itemize}
+
+Moreover, the following platforms are not supported due to how secretive their owners are, but were reported to be working after extending the system integration layer:
+
+\begin{itemize}
+\item PlayStation 4
+\item Xbox One
+\item Nintendo Switch
+\item Google Stadia
 \end{itemize}
 
 \subsection{Initial client setup}
@@ -375,6 +405,10 @@ The client with on-demand profiling enabled needs to perform additional bookkeep
 \subsubsection{Client discovery}
 
 By default Tracy client will announce its presence to the local network\footnote{Additional configuration may be required to achieve full functionality, depending on your network layout. Read about UDP broadcasts for more information.}. If you want to disable this feature, define the \texttt{TRACY\_NO\_BROADCAST} macro.
+
+\subsubsection{Client network interface}
+
+By default Tracy client will listen on all network interfaces. If you want to restrict it to only listening on the localhost interface, define the \texttt{TRACY\_ONLY\_LOCALHOST} macro.
 
 \subsubsection{Setup for multi-DLL projects}
 
@@ -552,6 +586,7 @@ We can immediately see that there are two distinct peaks, at 13.4~\si{\micro\sec
 We can also see that the graph gradually falls off to the right (representing longer times), with a small bump near the end. This can be attributed to running in power saving mode, with differing reaction times to the required operating frequency boost to full power.
 
 \subsection{Building the server}
+\label{buildingserver}
 
 The easiest way to get going is to build the data analyzer, available in the \texttt{profiler} directory. With it you can connect to localhost or remote clients and view the collected data right away.
 
@@ -572,6 +607,8 @@ Due to the memory requirements for data storage, Tracy server is only supposed t
 \subsubsection{Required libraries}
 
 To build the application contained in the \texttt{profiler} directory, you will need to install external libraries, which are not bundled with Tracy.
+
+\subparagraph{Capstone library} At the time of writing, the capstone library is in a bit of disarray. The officially released version 4.0.2 can't disassemble some AVX instructions, which are successfully parsed by the \texttt{next} branch. However, the \texttt{next} branch somehow lost information about input/output registers for some functions. You may want to explore the various available versions to find one that suits your needs the best.
 
 \paragraph{Windows}
 
@@ -899,7 +936,7 @@ $2560\times1440$ & 23~FPS & 3300~FPS & 1600~FPS
 
 To record a zone's\footnote{A \texttt{zone} represents the life-time of a special on-stack profiler variable. Typically it would exist for the duration of a whole scope of the profiled function, but you also can measure time spent in scopes of a for-loop, or an if-branch.} execution time add the \texttt{ZoneScoped} macro at the beginning of the scope you want to measure. This will automatically record function name, source file name and location. Optionally you may use the \texttt{ZoneScopedC(color)} macro to set a custom color for the zone. Note that the color value will be constant in the recording (don't try to parametrize it). You may also set a custom name for the zone, using the \texttt{ZoneScopedN(name)} macro. Color and name may be combined by using the \texttt{ZoneScopedNC(name, color)} macro.
 
-Use the \texttt{ZoneText(text, size)} macro to add a custom text string that will be displayed along the zone information (for example, name of the file you are opening). Multiple text strings can be attached to any single zone.
+Use the \texttt{ZoneText(text, size)} macro to add a custom text string that will be displayed along the zone information (for example, name of the file you are opening). Multiple text strings can be attached to any single zone. If you want to send a numeric value and don't want to pay the cost of converting it to a string, you may use the \texttt{ZoneValue(uint64\_t)} macro.
 
 If you want to set zone name on a per-call basis, you may do so using the \texttt{ZoneName(text, size)} macro. This name won't be used in the process of grouping the zones for statistical purposes (sections~\ref{statistics} and~\ref{findzone}).
 
@@ -908,7 +945,7 @@ If you want to set zone name on a per-call basis, you may do so using the \textt
 
 Using the \texttt{ZoneScoped} family of macros creates a stack variable named \texttt{\_\_\_tracy\_scoped\_zone}. If you want to measure more than one zone in the same scope, you will need to use the \texttt{ZoneNamed} macros, which require that you provide a name for the created variable. For example, instead of \texttt{ZoneScopedN("Zone name")}, you would use \texttt{ZoneNamedN(variableName, "Zone name", true)}\footnote{The last parameter is explained in section~\ref{filteringzones}.}.
 
-The \texttt{ZoneText} and \texttt{ZoneName} macros work only for the zones created using the \texttt{ZoneScoped} macros. For the \texttt{ZoneNamed} macros, you will need to invoke the methods \texttt{Text} or \texttt{Name} of the variable you have created.
+The \texttt{ZoneText}, \texttt{ZoneValue} and \texttt{ZoneName} macros apply to the zones created using the \texttt{ZoneScoped} macros. For zones created using the \texttt{ZoneNamed} macros, you can use the \texttt{ZoneTextV(variableName, text, size)}, \texttt{ZoneValueV(variableName, uint64\_t)}, or \texttt{ZoneNameV(variableName, text, size)} macros, or invoke the methods \texttt{Text}, \texttt{Value} or \texttt{Name} directly on the variable you have created.
 
 \begin{bclogo}[
 noborder=true,
@@ -1360,12 +1397,12 @@ Refer to sections~\ref{markingzones} and~\ref{multizone} for description of macr
 
 Unlike C++, there's no automatic destruction mechanism in C, so you will need to manually mark where the zone ends. To do so use the \texttt{TracyCZoneEnd(ctx)} macro.
 
-Zone text and name may be set by using the \texttt{TracyCZoneText(ctx, txt, size)} and \texttt{TracyCZoneName(ctx, txt, size)} macros. Make sure you are following the zone stack rules, as described in section~\ref{multizone}!
+Zone text and name may be set by using the \texttt{TracyCZoneText(ctx, txt, size)}, \texttt{TracyCZoneValue(ctx, value)} and \texttt{TracyCZoneName(ctx, txt, size)} macros. Make sure you are following the zone stack rules, as described in section~\ref{multizone}!
 
 \paragraph{Zone context data structure}
 \label{zonectx}
 
-In typical use cases the zone context data structure is hidden from your view, requiring only to specify its name for the \texttt{TracyCZone} and \texttt{TracyCZoneEnd} macros. However, it is possible to use it in advanced scenarios, for example if you want to start a zone in one function, then end it in another one. To do so you will need to forward the data structure either through a function parameter, or as a return value. To accomplish this you need to keep in mind the following rules:
+In typical use cases the zone context data structure is hidden from your view, requiring only to specify its name for the \texttt{TracyCZone} and \texttt{TracyCZoneEnd} macros. However, it is possible to use it in advanced scenarios, for example if you want to start a zone in one function, then end it in another one. To do so you will need to forward the data structure either through a function parameter, or as a return value, or place it in a thread-local stack structure. To accomplish this you need to keep in mind the following rules:
 
 \begin{itemize}
 \item The created variable name is exactly what you pass as the \texttt{ctx} parameter.
@@ -2325,7 +2362,7 @@ First and foremost, the presented information is constructed from a number of ca
 
 The \emph{Name} column contains name of the function in which the sampling was done. If the \emph{\faSitemap{}~Inlines} option is enabled, functions which were inlined will be preceded with a '\faCaretRight{}' symbol and additionally display their parent function name in parenthesis. Otherwise, only non-inlined functions are listed, with count of inlined functions in parenthesis. Any entry containing inlined function may be expanded to display the corresponding functions list (some functions may be hidden if the \emph{\faPuzzlePiece{}~Show all} option is disabled, due to lack of sampling data). Clicking on a function name will open the call stack sample parents window (see chapter~\ref{sampleparents}). Note that if inclusive times are displayed, listed functions will be partially or completely coming from mid-stack frames, which will prevent, or limit the capability to display parent call stacks.
 
-The \emph{Location} column displays the corresponding source file name and line number. Depending on the \emph{Location} option selection it can either show function entry address, or the instruction at which the sampling was performed. The \emph{Entry} mode points at the beginning of a non-inlined function, or at the place where inlined function was inserted in its parent function. The \emph{Sample} mode is not useful for non-inlined functions, as it points to one randomly selected sampling point out of many that were captured. However, in case of inlined functions, this random sampling point is within the inlined function body. Using these options in tandem enable you to look at both the inlined function code and the place where it was inserted. If the \emph{Smart} location is selected, profiler will display entry point position for non-inlined functions and sample location for inlined functions.
+The \emph{Location} column displays the corresponding source file name and line number. Depending on the \emph{Location} option selection it can either show function entry address, or the instruction at which the sampling was performed. The \emph{Entry} mode points at the beginning of a non-inlined function, or at the place where inlined function was inserted in its parent function. The \emph{Sample} mode is not useful for non-inlined functions, as it points to one randomly selected sampling point out of many that were captured. However, in case of inlined functions, this random sampling point is within the inlined function body. Using these options in tandem enable you to look at both the inlined function code and the place where it was inserted. If the \emph{Smart} location is selected, profiler will display entry point position for non-inlined functions and sample location for inlined functions. Selecting the \emph{\faAt{}~Address} option will instead print the symbol address.
 
 The location data is complemented by the originating executable image name, contained in the \emph{Image} column.
 
@@ -2481,6 +2518,8 @@ The frame time graph (section~\ref{frametimegraph}) behavior is altered when a z
 
 Each bar is drawn in gray color, with the white part accounting for the zone time. If the execution time is greater than the frame time (this is possible if more than one thread was executing the same zone), the overflow will be displayed using red color.
 
+Enabling \emph{Self time} option has an effect on the displayed values.
+
 \begin{bclogo}[
 noborder=true,
 couleur=black!5,
@@ -2618,7 +2657,7 @@ There's also a section containing the selected frame set timing statistics and h
 
 If \emph{CPU topology} data is available (see section~\ref{cputopology}), you will be able to view the package, core and thread hierarchy.
 
-The \emph{Source location substitutions} section allows adapting the source file paths, as captured by the profiler to the actual on-disk locations. You can create a new substitution by clicking the \emph{Add new substitution} button. This will add a new entry, with input fields for ECMAScript-conforming regular expression pattern and its corresponding replacement string. The outcome of substitutions can be quickly tested in the \emph{example source location} input field, which will be transformed and displayed below, as \emph{result}.
+The \emph{Source location substitutions} section allows adapting the source file paths, as captured by the profiler to the actual on-disk locations\footnote{This has no effect on source files cached during the profiling run.}. You can create a new substitution by clicking the \emph{Add new substitution} button. This will add a new entry, with input fields for ECMAScript-conforming regular expression pattern and its corresponding replacement string. The outcome of substitutions can be quickly tested in the \emph{example source location} input field, which will be transformed and displayed below, as \emph{result}.
 
 \begin{bclogo}[
 noborder=true,
@@ -2729,10 +2768,10 @@ noborder=true,
 couleur=black!5,
 logo=\bcbombe
 ]{Important}
-Source file view works on the local files you have on your disk. The traces themselves do not contain any source code! This has the following implications:
+Source file view depends on local files you have on your disk, as the profiled application doesn't need them to run. If the profiler can access the source files during capture, it will cache them for further reference. Otherwise, you will need to make them available, possibly by using file path substitutions. Keep the following rules in mind:
 
 \begin{itemize}
-\item Source files can only be viewed, if the source file location recorded in the trace matches the files you have on your disk. See section~\ref{traceinfo} for information on redirecting source file locations.
+\item Source files can only be used, if the source file location recorded in the trace matches the files you have on your disk. See section~\ref{traceinfo} for information on redirecting source file locations.
 \item Time stamp of the source file cannot be newer than the trace, as it typically would indicate that the file has been changed and no longer contains the code that was profiled.
 \item \textbf{The displayed source files might not reflect the code that was profiled!} It is up to you to verify that you don't have a modified version of the code, with regards to the trace.
 \end{itemize}
@@ -2760,7 +2799,7 @@ This is pretty much the original source file view window, but with the ability t
 
 \paragraph{Assembly mode}
 
-This mode shows the disassembly of the symbol machine code. Each assembly instruction is displayed listed with its location in the program memory during execution. If the \emph{\faSearchLocation{}~Relative locations} option is selected, an offset from the symbol beginning will be printed instead.
+This mode shows the disassembly of the symbol machine code. Each assembly instruction is displayed listed with its location in the program memory during execution. If the \emph{\faSearchLocation{}~Relative locations} option is selected, an offset from the symbol beginning will be printed instead. Clicking the \LMB{}~left mouse button on the address/offset will switch to counting line numbers, using the selected one as origin (i.e. zero value). Line numbers are displayed inside \texttt{[]} brackets. This display mode can be useful to correlate lines with output of external tools, such as \texttt{llvm-mca}. To disable line numbering click the \RMB{}~right mouse button on a line number.
 
 If the \emph{\faFileImport{}~Source locations} option is selected, each line of the assembly code will also contain information about the originating source file name and line number. For easier differentiation between different source files, each file is assigned its own color. Clicking the \LMB{}~left mouse button on a displayed source location will switch the source file, if necessary, and focus the source view on selected line.
 
@@ -2768,7 +2807,7 @@ Selecting the \emph{\faCogs{}~Machine code} option will enable display of raw ma
 
 If any instruction would jump to a predefined address, symbolic name of the jump target will be additionally displayed. If the destination location is within the currently displayed symbol an \texttt{->}~arrow will be prepended to the name. Hovering the \faMousePointer{}~mouse pointer over such symbol name will highlight the target location. Clicking on it with the \LMB{}~left mouse button will focus the view on the destination instruction, or switch view to the destination symbol.
 
-Enabling the \emph{\faShare{}~Jumps} option will show jumps within the symbol code as a series of arrows from the jump source to the jump target. Hovering the \faMousePointer{}~mouse pointer over the jump arrow will display jump information tooltip and will also draw the jump range on the scroll bar, as a green line. Jump target location will be marked by a horizontal green line. Jumps going out of the symbol\footnote{This includes jumps, procedure calls and returns. For example, in x86 assembly the respective operand names can be: \texttt{jmp}, \texttt{call}, \texttt{ret}.} will be indicated by a smaller arrow pointing away from the code.
+Enabling the \emph{\faShare{}~Jumps} option will show jumps within the symbol code as a series of arrows from the jump source to the jump target. Hovering the \faMousePointer{}~mouse pointer over a jump arrow will display jump information tooltip and will also draw the jump range on the scroll bar, as a green line. Jump target location will be marked by a horizontal green line. Clicking on a jump arrow with the \LMB{}~left mouse button will focus the view on the target location. Jumps going out of the symbol\footnote{This includes jumps, procedure calls and returns. For example, in x86 assembly the respective operand names can be: \texttt{jmp}, \texttt{call}, \texttt{ret}.} will be indicated by a smaller arrow pointing away from the code.
 
 The \emph{AT\&T} switch can be used to select between \emph{Intel} and \emph{AT\&T} assembly syntax. Beware that microarchitecture data is only available if Intel syntax is selected.
 
@@ -2789,7 +2828,7 @@ Selection of the CPU microarchitecture can be performed using the \emph{\faMicro
 
 Enabling the \emph{\faTruckLoading{}~Latency} option will display graphical representation of instruction latencies on the listing. Minimum latency of an instruction is represented with a red bar, while the maximum latency is represented by a yellow bar.
 
-Clicking on the \emph{\faFileImport{}~Save} button lets you write the disassembly listing to a file. You can then manually extract some critical loop kernel and pass it to a CPU simulator, such as \emph{LLVM Machine Code Analyzer} (\texttt{llvm-mca})\footnote{\url{https://llvm.org/docs/CommandGuide/llvm-mca.html}}, in order to see how the code is executed and if there are any pipeline bubbles. Consult the \texttt{llvm-mca} documentation for more details.
+Clicking on the \emph{\faFileImport{}~Save} button lets you write the disassembly listing to a file. You can then manually extract some critical loop kernel and pass it to a CPU simulator, such as \emph{LLVM Machine Code Analyzer} (\texttt{llvm-mca})\footnote{\url{https://llvm.org/docs/CommandGuide/llvm-mca.html}}, in order to see how the code is executed and if there are any pipeline bubbles. Consult the \texttt{llvm-mca} documentation for more details. Alternatively, you might click the \RMB{}~right mouse button on a jump arrow and save only the instructions within the jump range, using the \emph{\faFileImport{}~Save jump range} button.
 
 \subparagraph{Instruction dependencies}
 
@@ -2827,6 +2866,8 @@ An assembly instruction may be associated with only a single source line, but a 
 If automated call stack sampling (see chapter~\ref{sampling}) was performed, additional profiling information will be available. The first column of source and assembly views will contain percentage counts of collected instruction pointer samples for each displayed line, both in numerical and graphical bar form. This information can be used to determine which line of the function takes the most time. The displayed percentage values are heat map color coded, with the lowest values mapped to dark red, and the highest values mapped to bright yellow. The color code will appear next to the percentage value, and on the scroll bar, so that 'hot' places in code can be identified at a glance.
 
 Instruction timings can be viewed as a group. To begin constructing such group, click the \LMB{}~left mouse button on the percentage value. Additional instructions can be added using the \keys{\ctrl}~key, while holding the \keys{\shift}~key will allow selection of a range. To cancel the selection, click the \RMB{}~right mouse button on a percentage value. Group statistics can be seen at the bottom of the pane.
+
+Clicking the \MMB{}~middle mouse button on the percentage value of an assembly instruction will display call stack parents of the selected sample (see chapter~\ref{sampleparents}). This functionality is only available for instructions that have collected sampling data, and only in the assembly view, as the source code may be inlined multiple times, which would result in ambiguous location data.
 
 Sample data source is controlled by the \emph{\faSitemap{}~Function} control, in the window header. If this option is disabled, the sample data represents the whole symbol. If it is enabled, then the sample data will only include the selected function.
 
@@ -2895,6 +2936,7 @@ This window lists all annotations marked on the timeline. Each annotation is pre
 \end{figure}
 
 \section{Importing external profiling data}
+\label{importingdata}
 
 Tracy can import data generated by other profilers. This external data cannot be directly loaded, but must be converted first. Currently there's only support for converting chrome:tracing data, through the \texttt{import-chrome} utility.
 
@@ -2911,6 +2953,7 @@ logo=\bcattention
 \end{bclogo}
 
 \section{Configuration files}
+\label{configurationfiles}
 
 While the client part doesn't read or write anything to the disk (with the exception of accessing the \texttt{/proc} filesystem on Linux), the server part has to keep some persistent state. The naming conventions or internal data format of the files are not meant to be known by profiler users, but you may want to do a backup of the configuration, or move it to another machine.
 

@@ -1,6 +1,7 @@
 #ifndef __TRACYSOURCEVIEW_HPP__
 #define __TRACYSOURCEVIEW_HPP__
 
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -131,24 +132,24 @@ public:
 
     void SetCpuId( uint32_t cpuid );
 
-    void OpenSource( const char* fileName, int line, const View& view );
+    void OpenSource( const char* fileName, int line, const View& view, const Worker& worker );
     void OpenSymbol( const char* fileName, int line, uint64_t baseAddr, uint64_t symAddr, const Worker& worker, const View& view );
-    void Render( const Worker& worker, const View& view );
+    void Render( const Worker& worker, View& view );
 
     void CalcInlineStats( bool val ) { m_calcInlineStats = val; }
 
 private:
-    void ParseSource( const char* fileName, const Worker* worker, const View& view );
+    void ParseSource( const char* fileName, const Worker& worker, const View& view );
     bool Disassemble( uint64_t symAddr, const Worker& worker );
 
     void RenderSimpleSourceView();
-    void RenderSymbolView( const Worker& worker, const View& view );
+    void RenderSymbolView( const Worker& worker, View& view );
 
     void RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<uint64_t, uint32_t> ipcount, unordered_flat_map<uint64_t, uint32_t> ipcountAsm, uint32_t ipmax, const Worker& worker, const View& view );
-    uint64_t RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<uint64_t, uint32_t> ipcount, uint32_t ipmax, const Worker& worker, const View& view );
+    uint64_t RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<uint64_t, uint32_t> ipcount, uint32_t ipmax, const Worker& worker, View& view );
 
     void RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint32_t iptotal, uint32_t ipmax, const Worker* worker );
-    void RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal, uint32_t ipmax, const Worker& worker, uint64_t& jumpOut, int maxAddrLen, const View& view );
+    void RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal, uint32_t ipmax, const Worker& worker, uint64_t& jumpOut, int maxAddrLen, View& view );
 
     void SelectLine( uint32_t line, const Worker* worker, bool changeAsmLine = true, uint64_t targetAddr = 0 );
     void SelectAsmLines( uint32_t file, uint32_t line, const Worker& worker, bool changeAsmLine = true, uint64_t targetAddr = 0 );
@@ -166,6 +167,10 @@ private:
     void FollowWrite( int line, RegsX86 reg, int limit );
     void CheckRead( int line, RegsX86 reg, int limit );
     void CheckWrite( int line, RegsX86 reg, int limit );
+
+#ifndef TRACY_NO_FILESELECTOR
+    void Save( const Worker& worker, size_t start = 0, size_t stop = std::numeric_limits<size_t>::max() );
+#endif
 
     struct TokenizerState
     {
@@ -185,7 +190,8 @@ private:
     uint64_t m_symAddr;
     uint64_t m_baseAddr;
     uint64_t m_targetAddr;
-    char* m_data;
+    const char* m_data;
+    char* m_dataBuf;
     size_t m_dataSize;
     int m_targetLine;
     int m_selectedLine;
@@ -196,12 +202,14 @@ private:
     uint32_t m_codeLen;
     int32_t m_disasmFail;
     DecayValue<uint64_t> m_highlightAddr;
+    int m_asmCountBase;
     bool m_asmRelative;
     bool m_asmBytes;
     bool m_asmShowSourceLocation;
     bool m_calcInlineStats;
     uint8_t m_maxAsmBytes;
     bool m_atnt;
+    uint64_t m_jumpPopupAddr;
 
     std::vector<Line> m_lines;
     std::vector<AsmLine> m_asm;

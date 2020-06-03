@@ -12,6 +12,7 @@
 #include "TracyVector.hpp"
 #include "tracy_robin_hood.h"
 #include "../common/TracyForceInline.hpp"
+#include "../common/TracyQueue.hpp"
 
 namespace tracy
 {
@@ -42,6 +43,22 @@ struct StringRef
         };
         uint8_t __data;
     };
+};
+
+struct StringRefHasher
+{
+    size_t operator()( const StringRef& key ) const
+    {
+        return charutil::hash( (const char*)&key, sizeof( StringRef ) );
+    }
+};
+
+struct StringRefComparator
+{
+    bool operator()( const StringRef& lhs, const StringRef& rhs ) const
+    {
+        return memcmp( &lhs, &rhs, sizeof( StringRef ) ) == 0;
+    }
 };
 
 class StringIdx
@@ -536,6 +553,7 @@ struct ThreadData
 #ifndef TRACY_NO_STATISTICS
     Vector<int64_t> childTimeStack;
     Vector<GhostZone> ghostZones;
+    uint64_t ghostIdx;
 #endif
     Vector<SampleData> samples;
 };
@@ -555,6 +573,7 @@ struct GpuCtxData
     float period;
     unordered_flat_map<uint64_t, GpuCtxThreadData> threadData;
     short_ptr<GpuEvent> query[64*1024];
+    GpuContextType type;
 };
 
 enum { GpuCtxDataSize = sizeof( GpuCtxData ) };

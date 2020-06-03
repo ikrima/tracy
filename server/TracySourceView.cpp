@@ -75,6 +75,7 @@ SourceView::SourceView( ImFont* font )
     , m_symAddr( 0 )
     , m_targetAddr( 0 )
     , m_data( nullptr )
+    , m_dataBuf( nullptr )
     , m_dataSize( 0 )
     , m_targetLine( 0 )
     , m_selectedLine( 0 )
@@ -83,6 +84,7 @@ SourceView::SourceView( ImFont* font )
     , m_hoveredSource( 0 )
     , m_codeLen( 0 )
     , m_highlightAddr( 0 )
+    , m_asmCountBase( -1 )
     , m_asmRelative( false )
     , m_asmBytes( false )
     , m_asmShowSourceLocation( true )
@@ -293,7 +295,7 @@ SourceView::SourceView( ImFont* font )
 
 SourceView::~SourceView()
 {
-    delete[] m_data;
+    delete[] m_dataBuf;
 }
 
 static constexpr uint32_t PackCpuInfo( uint32_t cpuid )
@@ -384,7 +386,7 @@ void SourceView::SetCpuId( uint32_t cpuId )
     SelectMicroArchitecture( "ZEN2" );
 }
 
-void SourceView::OpenSource( const char* fileName, int line, const View& view )
+void SourceView::OpenSource( const char* fileName, int line, const View& view, const Worker& worker )
 {
     m_targetLine = line;
     m_selectedLine = line;
@@ -393,7 +395,7 @@ void SourceView::OpenSource( const char* fileName, int line, const View& view )
     m_symAddr = 0;
     m_sourceFiles.clear();
 
-    ParseSource( fileName, nullptr, view );
+    ParseSource( fileName, worker, view );
     assert( !m_lines.empty() );
 }
 
@@ -407,7 +409,7 @@ void SourceView::OpenSymbol( const char* fileName, int line, uint64_t baseAddr, 
     m_selectedAddresses.clear();
     m_selectedAddresses.emplace( symAddr );
 
-    ParseSource( fileName, &worker, view );
+    ParseSource( fileName, worker, view );
     Disassemble( baseAddr, worker );
     SelectLine( line, &worker, true, symAddr );
 
@@ -429,28 +431,39 @@ void SourceView::OpenSymbol( const char* fileName, int line, uint64_t baseAddr, 
     }
 }
 
-void SourceView::ParseSource( const char* fileName, const Worker* worker, const View& view )
+void SourceView::ParseSource( const char* fileName, const Worker& worker, const View& view )
 {
     if( m_file != fileName )
     {
         m_file = fileName;
-        m_fileStringIdx = worker ? worker->FindStringIdx( fileName ) : 0;
+        m_fileStringIdx = worker.FindStringIdx( fileName );
         m_lines.clear();
         if( fileName )
         {
-            FILE* f = fopen( view.SourceSubstitution( fileName ), "rb" );
-            fseek( f, 0, SEEK_END );
-            const auto sz = ftell( f );
-            fseek( f, 0, SEEK_SET );
-            if( sz > m_dataSize )
+            uint32_t sz;
+            const auto srcCache = worker.GetSourceFileFromCache( fileName );
+            if( srcCache.data != nullptr )
             {
-                delete[] m_data;
-                m_data = new char[sz+1];
-                m_dataSize = sz;
+                m_data = srcCache.data;
+                sz = srcCache.len;
             }
-            fread( m_data, 1, sz, f );
-            m_data[sz] = '\0';
-            fclose( f );
+            else
+            {
+                FILE* f = fopen( view.SourceSubstitution( fileName ), "rb" );
+                assert( f );
+                fseek( f, 0, SEEK_END );
+                sz = ftell( f );
+                fseek( f, 0, SEEK_SET );
+                if( sz > m_dataSize )
+                {
+                    delete[] m_dataBuf;
+                    m_dataBuf = new char[sz];
+                    m_dataSize = sz;
+                }
+                fread( m_dataBuf, 1, sz, f );
+                m_data = m_dataBuf;
+                fclose( f );
+            }
 
             m_tokenizer.Reset();
             auto txt = m_data;
@@ -469,7 +482,7 @@ void SourceView::ParseSource( const char* fileName, const Worker* worker, const 
                     end++;
                     if( *end == '\n' ) end++;
                 }
-                if( *end == '\0' ) break;
+                if( end - m_data == sz ) break;
                 txt = end;
             }
         }
@@ -495,6 +508,7 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
     m_jumpOut.clear();
     m_maxJumpLevel = 0;
     m_asmSelected = -1;
+    m_asmCountBase = -1;
     if( symAddr == 0 ) return false;
     m_cpuArch = worker.GetCpuArch();
     if( m_cpuArch == CpuArchUnknown ) return false;
@@ -683,8 +697,9 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
             if( ( m_cpuArch == CpuArchX64 || m_cpuArch == CpuArchX86 ) && op.id == X86_INS_LEA )
             {
                 assert( op.detail->x86.op_count == 2 );
-                assert( op.detail->x86.operands[1].type == X86_OP_MEM );
-                auto& mem = op.detail->x86.operands[1].mem;
+                const auto opidx = m_atnt ? 0 : 1;
+                assert( op.detail->x86.operands[opidx].type == X86_OP_MEM );
+                auto& mem = op.detail->x86.operands[opidx].mem;
                 if( mem.base == X86_REG_INVALID )
                 {
                     if( mem.index == X86_REG_INVALID )
@@ -839,7 +854,7 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
     return true;
 }
 
-void SourceView::Render( const Worker& worker, const View& view )
+void SourceView::Render( const Worker& worker, View& view )
 {
     m_highlightAddr.Decay( 0 );
     m_hoveredLine.Decay( 0 );
@@ -848,11 +863,20 @@ void SourceView::Render( const Worker& worker, const View& view )
     if( m_symAddr == 0 )
     {
         if( m_file ) TextFocused( ICON_FA_FILE " File:", m_file );
-        TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
-        ImGui::SameLine();
-        TextColoredUnformatted( ImVec4( 1.f, 0.3f, 0.3f, 1.f ), "The source file contents might not reflect the actual profiled code!" );
-        ImGui::SameLine();
-        TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+        if( m_data == m_dataBuf )
+        {
+            TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+            ImGui::SameLine();
+            TextColoredUnformatted( ImVec4( 1.f, 0.3f, 0.3f, 1.f ), "The source file contents might not reflect the actual profiled code!" );
+            ImGui::SameLine();
+            TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+        }
+        else
+        {
+            TextColoredUnformatted( ImVec4( 0.4f, 0.8f, 0.4f, 1.f ), ICON_FA_DATABASE );
+            ImGui::SameLine();
+            ImGui::TextUnformatted( "Source file cached during profiling run" );
+        }
 
         RenderSimpleSourceView();
     }
@@ -906,7 +930,7 @@ void SourceView::RenderSimpleSourceView()
     ImGui::EndChild();
 }
 
-void SourceView::RenderSymbolView( const Worker& worker, const View& view )
+void SourceView::RenderSymbolView( const Worker& worker, View& view )
 {
     assert( m_symAddr != 0 );
 
@@ -938,7 +962,8 @@ void SourceView::RenderSymbolView( const Worker& worker, const View& view )
         ImGui::SameLine();
         ImGui::SetNextItemWidth( -1 );
         ImGui::PushStyleVar( ImGuiStyleVar_FramePadding, ImVec2( 0, 0 ) );
-        if( ImGui::BeginCombo( "##functionList", worker.GetString( sym->name ), ImGuiComboFlags_HeightLarge ) )
+        const auto currSymName = m_symAddr == m_baseAddr ? "[ - self - ]" : worker.GetString( sym->name );
+        if( ImGui::BeginCombo( "##functionList", currSymName, ImGuiComboFlags_HeightLarge ) )
         {
             uint32_t totalSamples = 0;
             const auto& symStat = worker.GetSymbolStats();
@@ -1022,7 +1047,8 @@ void SourceView::RenderSymbolView( const Worker& worker, const View& view )
                 auto isym = worker.GetSymbolData( v.first );
                 assert( isym );
                 ImGui::PushID( v.first );
-                if( ImGui::Selectable( worker.GetString( isym->name ), v.first == m_symAddr, ImGuiSelectableFlags_SpanAllColumns ) )
+                const auto symName = v.first == m_baseAddr ? "[ - self - ]" : worker.GetString( isym->name );
+                if( ImGui::Selectable( symName, v.first == m_symAddr, ImGuiSelectableFlags_SpanAllColumns ) )
                 {
                     m_symAddr = v.first;
                 }
@@ -1129,7 +1155,7 @@ void SourceView::RenderSymbolView( const Worker& worker, const View& view )
         {
             auto line = sym->line;
             auto file = line == 0 ? nullptr : worker.GetString( sym->file );
-            if( file && !SourceFileValid( file, worker.GetCaptureTime(), view ) )
+            if( file && !SourceFileValid( file, worker.GetCaptureTime(), view, worker ) )
             {
                 file = nullptr;
                 line = 0;
@@ -1171,24 +1197,46 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
 {
     if( m_sourceFiles.empty() )
     {
-        TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
-        ImGui::SameLine();
-        TextColoredUnformatted( ImVec4( 1.f, 0.3f, 0.3f, 1.f ), "The source file contents might not reflect the actual profiled code!" );
-        ImGui::SameLine();
-        TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
-    }
-    else
-    {
-        TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
-        if( ImGui::IsItemHovered() )
+        if( m_data == m_dataBuf )
         {
-            ImGui::BeginTooltip();
             TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
             ImGui::SameLine();
             TextColoredUnformatted( ImVec4( 1.f, 0.3f, 0.3f, 1.f ), "The source file contents might not reflect the actual profiled code!" );
             ImGui::SameLine();
             TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
-            ImGui::EndTooltip();
+        }
+        else
+        {
+            TextColoredUnformatted( ImVec4( 0.4f, 0.8f, 0.4f, 1.f ), ICON_FA_DATABASE );
+            ImGui::SameLine();
+            ImGui::TextUnformatted( "Source file cached during profiling run" );
+        }
+    }
+    else
+    {
+        if( m_data == m_dataBuf )
+        {
+            TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+            if( ImGui::IsItemHovered() )
+            {
+                ImGui::BeginTooltip();
+                TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+                ImGui::SameLine();
+                TextColoredUnformatted( ImVec4( 1.f, 0.3f, 0.3f, 1.f ), "The source file contents might not reflect the actual profiled code!" );
+                ImGui::SameLine();
+                TextColoredUnformatted( ImVec4( 1.f, 1.f, 0.2f, 1.f ), ICON_FA_EXCLAMATION_TRIANGLE );
+                ImGui::EndTooltip();
+            }
+        }
+        else
+        {
+            TextColoredUnformatted( ImVec4( 0.4f, 0.8f, 0.4f, 1.f ), ICON_FA_DATABASE );
+            if( ImGui::IsItemHovered() )
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted( "Source file cached during profiling run" );
+                ImGui::EndTooltip();
+            }
         }
         ImGui::SameLine();
         TextDisabledUnformatted( ICON_FA_FILE " File:" );
@@ -1208,12 +1256,12 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
                     SmallColorBox( color );
                     ImGui::SameLine();
                     auto fstr = worker.GetString( StringIdx( v.first ) );
-                    if( SourceFileValid( fstr, worker.GetCaptureTime(), view ) )
+                    if( SourceFileValid( fstr, worker.GetCaptureTime(), view, worker ) )
                     {
                         ImGui::PushID( v.first );
                         if( ImGui::Selectable( fstr, fstr == m_file ) )
                         {
-                            ParseSource( fstr, &worker, view );
+                            ParseSource( fstr, worker, view );
                             m_targetLine = v.second;
                             SelectLine( v.second, &worker );
                         }
@@ -1293,7 +1341,7 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
                     SmallColorBox( color );
                     ImGui::SameLine();
                     auto fstr = worker.GetString( StringIdx( v.first ) );
-                    if( SourceFileValid( fstr, worker.GetCaptureTime(), view ) )
+                    if( SourceFileValid( fstr, worker.GetCaptureTime(), view, worker ) )
                     {
                         ImGui::PushID( v.first );
                         if( ImGui::Selectable( fstr, fstr == m_file, ImGuiSelectableFlags_SpanAllColumns ) )
@@ -1307,7 +1355,7 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
                                     break;
                                 }
                             }
-                            ParseSource( fstr, &worker, view );
+                            ParseSource( fstr, worker, view );
                             m_targetLine = line;
                             SelectLine( line, &worker );
                         }
@@ -1507,7 +1555,7 @@ static int PrintHexBytes( char* buf, const uint8_t* bytes, size_t len )
     return buf - start;
 }
 
-uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<uint64_t, uint32_t> ipcount, uint32_t ipmax, const Worker& worker, const View& view )
+uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<uint64_t, uint32_t> ipcount, uint32_t ipmax, const Worker& worker, View& view )
 {
     if( m_disasmFail >= 0 )
     {
@@ -1524,7 +1572,7 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
             TextFocused( "Disassembled bytes:", RealToString( m_disasmFail ) );
             char tmp[64];
             auto bytesLeft = std::min( 16u, m_codeLen - m_disasmFail );
-            auto code = worker.GetSymbolCode( m_symAddr, m_codeLen );
+            auto code = worker.GetSymbolCode( m_baseAddr, m_codeLen );
             assert( code );
             PrintHexBytes( tmp, (const uint8_t*)code, bytesLeft );
             TextFocused( "Failure bytes:", tmp );
@@ -1596,80 +1644,7 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
     ImGui::SameLine();
     if( ImGui::SmallButton( ICON_FA_FILE_IMPORT " Save" ) )
     {
-        nfdchar_t* fn;
-        auto res = NFD_SaveDialog( "asm", nullptr, &fn );
-        if( res == NFD_OKAY )
-        {
-            FILE* f = nullptr;
-            const auto sz = strlen( fn );
-            if( sz < 5 || memcmp( fn + sz - 4, ".asm", 4 ) != 0 )
-            {
-                char tmp[1024];
-                sprintf( tmp, "%s.asm", fn );
-                f = fopen( tmp, "wb" );
-            }
-            else
-            {
-                f = fopen( fn, "wb" );
-            }
-            if( f )
-            {
-                char tmp[16];
-                auto sym = worker.GetSymbolData( m_symAddr );
-                assert( sym );
-                const char* symName;
-                if( sym->isInline )
-                {
-                    auto parent = worker.GetSymbolData( m_baseAddr );
-                    if( parent )
-                    {
-                        symName = worker.GetString( parent->name );
-                    }
-                    else
-                    {
-                        sprintf( tmp, "0x%" PRIx64, m_baseAddr );
-                        symName = tmp;
-                    }
-                }
-                else
-                {
-                    symName = worker.GetString( sym->name );
-                }
-                fprintf( f, "; Tracy Profiler disassembly of symbol %s [%s]\n\n", symName, worker.GetCaptureProgram() );
-                if( !m_atnt ) fprintf( f, ".intel_syntax\n\n" );
-
-                for( auto& v : m_asm )
-                {
-                    auto it = m_locMap.find( v.addr );
-                    if( it != m_locMap.end() )
-                    {
-                        fprintf( f, ".L%" PRIu32 ":\n", it->second );
-                    }
-                    bool hasJump = false;
-                    if( v.jumpAddr != 0 )
-                    {
-                        auto lit = m_locMap.find( v.jumpAddr );
-                        if( lit != m_locMap.end() )
-                        {
-                            fprintf( f, "\t%-*s.L%" PRIu32 "\n", m_maxMnemonicLen, v.mnemonic.c_str(), lit->second );
-                            hasJump = true;
-                        }
-                    }
-                    if( !hasJump )
-                    {
-                        if( v.operands.empty() )
-                        {
-                            fprintf( f, "\t%s\n", v.mnemonic.c_str() );
-                        }
-                        else
-                        {
-                            fprintf( f, "\t%-*s%s\n", m_maxMnemonicLen, v.mnemonic.c_str(), v.operands.c_str() );
-                        }
-                    }
-                }
-                fclose( f );
-            }
-        }
+        Save( worker );
     }
 #endif
 
@@ -1792,6 +1767,13 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
                             m_selectedAddresses.clear();
                             m_selectedAddresses.emplace( v.first );
                         }
+#ifndef TRACY_NO_FILESELECTOR
+                        else if( ImGui::IsMouseClicked( 1 ) )
+                        {
+                            ImGui::OpenPopup( "jumpPopup" );
+                            m_jumpPopupAddr = v.first;
+                        }
+#endif
                         selJumpStart = v.second.min;
                         selJumpEnd = v.second.max;
                         selJumpTarget = v.first;
@@ -1821,6 +1803,44 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
                 }
             }
         }
+
+#ifndef TRACY_NO_FILESELECTOR
+        if( m_font ) ImGui::PopFont();
+        if( ImGui::BeginPopup( "jumpPopup" ) )
+        {
+            if( ImGui::Button( ICON_FA_FILE_IMPORT " Save jump range" ) )
+            {
+                auto it = m_jumpTable.find( m_jumpPopupAddr );
+                assert( it != m_jumpTable.end() );
+
+                size_t minIdx = 0, maxIdx = 0;
+                size_t i;
+                for( i=0; i<m_asm.size(); i++ )
+                {
+                    if( m_asm[i].addr == it->second.min )
+                    {
+                        minIdx = i++;
+                        break;
+                    }
+                }
+                assert( i != m_asm.size() );
+                for( ; i<m_asm.size(); i++ )
+                {
+                    if( m_asm[i].addr == it->second.max )
+                    {
+                        maxIdx = i+1;
+                        break;
+                    }
+                }
+                assert( i != m_asm.size() );
+
+                Save( worker, minIdx, maxIdx );
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        if( m_font ) ImGui::PushFont( m_font );
+#endif
     }
 
     auto win = ImGui::GetCurrentWindow();
@@ -2228,7 +2248,7 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
     draw->AddLine( wpos + ImVec2( 0, ty+2 ), wpos + ImVec2( w, ty+2 ), 0x08FFFFFF );
 }
 
-void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal, uint32_t ipmax, const Worker& worker, uint64_t& jumpOut, int maxAddrLen, const View& view )
+void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal, uint32_t ipmax, const Worker& worker, uint64_t& jumpOut, int maxAddrLen, View& view )
 {
     const auto ty = ImGui::GetFontSize();
     auto draw = ImGui::GetWindowDrawList();
@@ -2246,6 +2266,8 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
     {
         draw->AddRectFilled( wpos, wpos + ImVec2( w, ty+1 ), 0xFF222233 );
     }
+
+    const auto asmIdx = &line - m_asm.data();
 
     if( iptotal != 0 )
     {
@@ -2320,6 +2342,39 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
                     m_asmSampleSelect.clear();
                     m_asmGroupSelect = -1;
                 }
+                else if( ImGui::IsMouseClicked( 2 ) )
+                {
+                    const auto cfi = worker.PackPointer( line.addr );
+                    const auto& symStat = worker.GetSymbolStats();
+                    auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
+                    if( inlineList )
+                    {
+                        bool found = false;
+                        const auto symEnd = m_baseAddr + m_codeLen;
+                        while( *inlineList < symEnd )
+                        {
+                            auto ipmap = worker.GetSymbolInstructionPointers( *inlineList );
+                            if( ipmap )
+                            {
+                                if( ipmap->find( cfi ) != ipmap->end() )
+                                {
+                                    view.ShowSampleParents( *inlineList );
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            inlineList++;
+                        }
+                        if( !found )
+                        {
+                            view.ShowSampleParents( m_baseAddr );
+                        }
+                    }
+                    else
+                    {
+                        view.ShowSampleParents( m_baseAddr );
+                    }
+                }
             }
             draw->AddLine( wpos + ImVec2( 0, 1 ), wpos + ImVec2( 0, ty-2 ), GetHotnessColor( ipcnt, ipmax ) );
         }
@@ -2327,7 +2382,11 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
     }
 
     char buf[256];
-    if( m_asmRelative )
+    if( m_asmCountBase >= 0 )
+    {
+        sprintf( buf, "[%i]", int( asmIdx - m_asmCountBase ) );
+    }
+    else if( m_asmRelative )
     {
         sprintf( buf, "+%" PRIu64, line.addr - m_baseAddr );
     }
@@ -2338,7 +2397,22 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
     const auto asz = strlen( buf );
     memset( buf+asz, ' ', maxAddrLen-asz );
     buf[maxAddrLen] = '\0';
-    TextDisabledUnformatted( buf );
+    if( m_asmCountBase >= 0 )
+    {
+        TextColoredUnformatted( asmIdx - m_asmCountBase < 0 ? 0xFFBB6666 : 0xFF66BBBB, buf );
+    }
+    else
+    {
+        TextDisabledUnformatted( buf );
+    }
+    if( ImGui::IsItemClicked( 0 ) )
+    {
+        m_asmCountBase = asmIdx;
+    }
+    else if( ImGui::IsItemClicked( 1 ) )
+    {
+        m_asmCountBase = -1;
+    }
 
     const auto stw = ImGui::CalcTextSize( " " ).x;
     bool lineHovered = false;
@@ -2372,7 +2446,8 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
                 lineHovered = true;
                 if( m_font ) ImGui::PopFont();
                 ImGui::BeginTooltip();
-                ImGui::Text( "%s:%i", fileName, srcline );
+                TextFocused( "File:", fileName );
+                TextFocused( "Line:", RealToString( srcline ) );
                 ImGui::EndTooltip();
                 if( m_font ) ImGui::PushFont( m_font );
                 if( ImGui::IsItemClicked( 0 ) || ImGui::IsItemClicked( 1 ) )
@@ -2383,9 +2458,9 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
                         SelectLine( srcline, &worker, false );
                         m_displayMode = DisplayMixed;
                     }
-                    else if( SourceFileValid( fileName, worker.GetCaptureTime(), view ) )
+                    else if( SourceFileValid( fileName, worker.GetCaptureTime(), view, worker ) )
                     {
-                        ParseSource( fileName, &worker, view );
+                        ParseSource( fileName, worker, view );
                         m_targetLine = srcline;
                         SelectLine( srcline, &worker, false );
                         m_displayMode = DisplayMixed;
@@ -2544,7 +2619,6 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
         memcpy( buf+m_maxMnemonicLen, line.operands.c_str(), line.operands.size() + 1 );
     }
 
-    const auto asmIdx = &line - m_asm.data();
     if( asmIdx == m_asmSelected )
     {
         TextColoredUnformatted( ImVec4( 1, 0.25f, 0.25f, 1 ), buf );
@@ -3436,6 +3510,89 @@ void SourceView::CheckWrite( int line, RegsX86 reg, int limit )
             }
         }
         idx++;
+    }
+}
+
+void SourceView::Save( const Worker& worker, size_t start, size_t stop )
+{
+    assert( start < m_asm.size() );
+    assert( start < stop );
+
+    nfdchar_t* fn;
+    auto res = NFD_SaveDialog( "asm", nullptr, &fn );
+    if( res == NFD_OKAY )
+    {
+        FILE* f = nullptr;
+        const auto sz = strlen( fn );
+        if( sz < 5 || memcmp( fn + sz - 4, ".asm", 4 ) != 0 )
+        {
+            char tmp[1024];
+            sprintf( tmp, "%s.asm", fn );
+            f = fopen( tmp, "wb" );
+        }
+        else
+        {
+            f = fopen( fn, "wb" );
+        }
+        if( f )
+        {
+            char tmp[16];
+            auto sym = worker.GetSymbolData( m_symAddr );
+            assert( sym );
+            const char* symName;
+            if( sym->isInline )
+            {
+                auto parent = worker.GetSymbolData( m_baseAddr );
+                if( parent )
+                {
+                    symName = worker.GetString( parent->name );
+                }
+                else
+                {
+                    sprintf( tmp, "0x%" PRIx64, m_baseAddr );
+                    symName = tmp;
+                }
+            }
+            else
+            {
+                symName = worker.GetString( sym->name );
+            }
+            fprintf( f, "; Tracy Profiler disassembly of symbol %s [%s]\n\n", symName, worker.GetCaptureProgram().c_str() );
+            if( !m_atnt ) fprintf( f, ".intel_syntax\n\n" );
+
+            const auto end = m_asm.size() < stop ? m_asm.size() : stop;
+            for( size_t i=start; i<end; i++ )
+            {
+                const auto& v = m_asm[i];
+                auto it = m_locMap.find( v.addr );
+                if( it != m_locMap.end() )
+                {
+                    fprintf( f, ".L%" PRIu32 ":\n", it->second );
+                }
+                bool hasJump = false;
+                if( v.jumpAddr != 0 )
+                {
+                    auto lit = m_locMap.find( v.jumpAddr );
+                    if( lit != m_locMap.end() )
+                    {
+                        fprintf( f, "\t%-*s.L%" PRIu32 "\n", m_maxMnemonicLen, v.mnemonic.c_str(), lit->second );
+                        hasJump = true;
+                    }
+                }
+                if( !hasJump )
+                {
+                    if( v.operands.empty() )
+                    {
+                        fprintf( f, "\t%s\n", v.mnemonic.c_str() );
+                    }
+                    else
+                    {
+                        fprintf( f, "\t%-*s%s\n", m_maxMnemonicLen, v.mnemonic.c_str(), v.operands.c_str() );
+                    }
+                }
+            }
+            fclose( f );
+        }
     }
 }
 

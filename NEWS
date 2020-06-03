@@ -9,6 +9,7 @@ a mistake.
 v0.7 (xxxx-xx-xx)
 -----------------
 
+- chrome:tracing importer now imports zone metadata from "args" key.
 - Added display of statistical mode to find zone menu.
 - Automatic stack sampling is now available on windows.
 - Properly handle tracing on long-running systems.
@@ -55,6 +56,11 @@ v0.7 (xxxx-xx-xx)
 - Profiler windows can be now docked.
 - CPU usage tooltip now displays a list of running threads.
 - Added possibility to filter discovered clients list.
+- Source files are now cached during capture.
+- Profiler will now display a popup when application crashes.
+- Added ability to send simple integral values as extra payload for zones.
+- Per-frame zone times on the frames plot can now display self time.
+- Ability to bind only on localhost interface.
 
 v0.6.3 (2020-02-13)
 -------------------
