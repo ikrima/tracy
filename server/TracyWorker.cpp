@@ -4047,6 +4047,17 @@ int Worker::AddGhostZone( const VarArray<CallstackFrameId>& cs, Vector<GhostZone
     static Vector<InlineStackData> stack;
     GetStackWithInlines( stack, cs );
 
+    if( !vec->empty() && vec->back().end.Val() > (int64_t)t )
+    {
+        auto tmp = vec;
+        for(;;)
+        {
+            auto& back = tmp->back();
+            back.end.SetVal( t );
+            if( back.child < 0 ) break;
+            tmp = &m_data.ghostChildren[back.child];
+        }
+    }
     const uint64_t refBackTime = vec->empty() ? 0 : vec->back().end.Val();
     int gcnt = 0;
     int idx = 0;
@@ -4060,7 +4071,7 @@ int Worker::AddGhostZone( const VarArray<CallstackFrameId>& cs, Vector<GhostZone
         if( inlineFrame.symAddr != stack[idx].symAddr ) break;
         if( back.end.Val() != refBackTime ) break;
         back.end.SetVal( t + m_samplingPeriod );
-        idx++;
+        if( ++idx == stack.size() ) break;
         if( back.child < 0 )
         {
             back.child = m_data.ghostChildren.size();
@@ -5265,7 +5276,7 @@ void Worker::ProcessGpuZoneBeginImpl( GpuEvent* zone, const QueueGpuZoneBegin& e
     uint64_t ztid;
     if( ctx->thread == 0 )
     {
-        // Vulkan context is not bound to any single thread.
+        // Vulkan, OpenCL and Direct3D 12 contexts are not bound to any single thread.
         zone->SetThread( CompressThread( ev.thread ) );
         ztid = ev.thread;
     }

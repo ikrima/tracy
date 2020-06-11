@@ -75,7 +75,9 @@ constexpr const char* s_tracyStackFrames[] = {
 constexpr const char* GpuContextNames[] = {
     "Invalid",
     "OpenGL",
-    "Vulkan"
+    "Vulkan",
+    "OpenCL",
+    "Direct3D 12"
 };
 
 
@@ -126,7 +128,7 @@ enum { MinFrameSize = 5 };
 
 static View* s_instance = nullptr;
 
-View::View( const char* addr, int port, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb )
+View::View( const char* addr, int port, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, GetWindowCallback gwcb )
     : m_worker( addr, port )
     , m_staticView( false )
     , m_pause( false )
@@ -137,6 +139,7 @@ View::View( const char* addr, int port, ImFont* fixedWidth, ImFont* smallFont, I
     , m_smallFont( smallFont )
     , m_bigFont( bigFont )
     , m_stcb( stcb )
+    , m_gwcb( gwcb )
     , m_userData()
 {
     assert( s_instance == nullptr );
@@ -145,7 +148,7 @@ View::View( const char* addr, int port, ImFont* fixedWidth, ImFont* smallFont, I
     InitTextEditor( fixedWidth );
 }
 
-View::View( FileRead& f, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb )
+View::View( FileRead& f, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont, SetTitleCallback stcb, GetWindowCallback gwcb )
     : m_worker( f )
     , m_filename( f.GetFilename() )
     , m_staticView( true )
@@ -155,6 +158,7 @@ View::View( FileRead& f, ImFont* fixedWidth, ImFont* smallFont, ImFont* bigFont,
     , m_smallFont( smallFont )
     , m_bigFont( bigFont )
     , m_stcb( stcb )
+    , m_gwcb( gwcb )
     , m_userData( m_worker.GetCaptureProgram().c_str(), m_worker.GetCaptureTime() )
 {
     assert( s_instance == nullptr );
@@ -194,7 +198,7 @@ View::~View()
 
 void View::InitTextEditor( ImFont* font )
 {
-    m_sourceView = std::make_unique<SourceView>( font );
+    m_sourceView = std::make_unique<SourceView>( font, m_gwcb );
     m_sourceViewFile = nullptr;
 }
 
@@ -505,7 +509,7 @@ bool View::DrawImpl()
         ImGui::SetNextWindowPos( viewport->Pos );
         ImGui::SetNextWindowSize( ImVec2( m_rootWidth, m_rootHeight ) );
         ImGui::SetNextWindowViewport( viewport->ID );
-        ImGui::Begin( "Timeline view###Profiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking );
+        ImGui::Begin( "Timeline view###Profiler", nullptr, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoNavFocus );
 
         style.WindowRounding = wrPrev;
         style.WindowBorderSize = wbsPrev;
@@ -726,7 +730,7 @@ bool View::DrawImpl()
         style.Colors[ImGuiCol_WindowBg] = ImVec4( 0.129f, 0.137f, 0.11f, 1.f );
 #endif
 
-        ImGui::Begin( "Work area" );
+        ImGui::Begin( "Work area", nullptr, ImGuiWindowFlags_NoNavFocus );
 
         style.WindowPadding = wpPrev;
 #ifndef TRACY_NO_ROOT_WINDOW
@@ -1118,7 +1122,7 @@ bool View::DrawConnection()
     {
 #ifndef TRACY_NO_FILESELECTOR
         nfdchar_t* fn;
-        auto res = NFD_SaveDialog( "tracy", nullptr, &fn );
+        auto res = NFD_SaveDialog( "tracy", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
         if( res == NFD_OKAY )
 #else
         const char* fn = "trace.tracy";
@@ -1292,7 +1296,7 @@ void View::DrawFrames()
 
     enum { MaxFrameTime = 50 * 1000 * 1000 };  // 50ms
 
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImGuiWindow* window = ImGui::GetCurrentWindowRead();
     if( window->SkipItems ) return;
 
     auto& io = ImGui::GetIO();
@@ -2299,7 +2303,7 @@ void View::DrawZones()
     if( m_vd.zvStart == m_vd.zvEnd ) return;
     assert( m_vd.zvStart < m_vd.zvEnd );
 
-    if( ImGui::GetCurrentWindow()->SkipItems ) return;
+    if( ImGui::GetCurrentWindowRead()->SkipItems ) return;
 
     m_gpuThread = 0;
     m_gpuStart = 0;
@@ -2472,7 +2476,8 @@ void View::DrawZones()
                     draw->AddTriangle( wpos + ImVec2( to/2, oldOffset + to/2 ), wpos + ImVec2( to/2, oldOffset + ty - to/2 ), wpos + ImVec2( to/2 + th, oldOffset + ty * 0.5 ), 0xFF886666, 2.0f );
                 }
 
-                const bool isMultithreaded = v->type == GpuContextType::Vulkan;
+                const bool isMultithreaded = (v->type == GpuContextType::Vulkan) || (v->type == GpuContextType::OpenCL) || (v->type == GpuContextType::Direct3D12);
+
                 char buf[64];
                 sprintf( buf, "%s context %zu", GpuContextNames[(int)v->type], i );
                 DrawTextContrast( draw, wpos + ImVec2( ty, oldOffset ), showFull ? 0xFFFFAAAA : 0xFF886666, buf );
@@ -10309,7 +10314,7 @@ void View::DrawCompare()
         if( ImGui::Button( ICON_FA_FOLDER_OPEN " Open second trace" ) && !m_compare.loadThread.joinable() )
         {
             nfdchar_t* fn;
-            auto res = NFD_OpenDialog( "tracy", nullptr, &fn );
+            auto res = NFD_OpenDialog( "tracy", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
             if( res == NFD_OKAY )
             {
                 try

@@ -68,7 +68,7 @@ static SourceView::RegsX86 s_regMapX86[X86_REG_ENDING];
 enum { JumpSeparation = 6 };
 enum { JumpArrowBase = 9 };
 
-SourceView::SourceView( ImFont* font )
+SourceView::SourceView( ImFont* font, GetWindowCallback gwcb )
     : m_font( font )
     , m_file( nullptr )
     , m_fileStringIdx( 0 )
@@ -93,6 +93,7 @@ SourceView::SourceView( ImFont* font )
     , m_showJumps( true )
     , m_cpuArch( CpuArchUnknown )
     , m_showLatency( false )
+    , m_gwcb( gwcb )
 {
     m_microArchOpMap.reserve( OpsNum );
     for( int i=0; i<OpsNum; i++ )
@@ -436,6 +437,7 @@ void SourceView::ParseSource( const char* fileName, const Worker& worker, const 
 {
     if( m_file != fileName )
     {
+        m_srcWidth = 0;
         m_file = fileName;
         m_fileStringIdx = worker.FindStringIdx( fileName );
         m_lines.clear();
@@ -510,6 +512,7 @@ bool SourceView::Disassemble( uint64_t symAddr, const Worker& worker )
     m_maxJumpLevel = 0;
     m_asmSelected = -1;
     m_asmCountBase = -1;
+    m_asmWidth = 0;
     if( symAddr == 0 ) return false;
     m_cpuArch = worker.GetCpuArch();
     if( m_cpuArch == CpuArchUnknown ) return false;
@@ -889,7 +892,8 @@ void SourceView::Render( const Worker& worker, View& view )
 
 void SourceView::RenderSimpleSourceView()
 {
-    ImGui::BeginChild( "##sourceView", ImVec2( 0, 0 ), true );
+    ImGui::SetNextWindowContentSize( ImVec2( m_srcWidth, 0 ) );
+    ImGui::BeginChild( "##sourceView", ImVec2( 0, 0 ), true, ImGuiWindowFlags_HorizontalScrollbar );
     if( m_font ) ImGui::PushFont( m_font );
 
     auto draw = ImGui::GetWindowDrawList();
@@ -915,6 +919,8 @@ void SourceView::RenderSimpleSourceView()
             }
             RenderLine( line, lineNum++, 0, 0, 0, nullptr );
         }
+        const auto win = ImGui::GetCurrentWindowRead();
+        m_srcWidth = win->DC.CursorMaxPos.x - win->DC.CursorStartPos.x;
     }
     else
     {
@@ -1376,11 +1382,12 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
     }
 
     const float bottom = m_srcSampleSelect.empty() ? 0 : ImGui::GetFrameHeight();
-    ImGui::BeginChild( "##sourceView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove );
+    ImGui::SetNextWindowContentSize( ImVec2( m_srcWidth, 0 ) );
+    ImGui::BeginChild( "##sourceView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar );
     if( m_font ) ImGui::PushFont( m_font );
 
     auto draw = ImGui::GetWindowDrawList();
-    const auto wpos = ImGui::GetWindowPos();
+    const auto wpos = ImGui::GetWindowPos() - ImVec2( ImGui::GetCurrentWindowRead()->Scroll.x, 0 );
     const auto wh = ImGui::GetWindowHeight();
     const auto ty = ImGui::GetFontSize();
     const auto ts = ImGui::CalcTextSize( " " ).x;
@@ -1410,6 +1417,8 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
             }
             RenderLine( line, lineNum++, 0, iptotal, ipmax, &worker );
         }
+        const auto win = ImGui::GetCurrentWindowRead();
+        m_srcWidth = win->DC.CursorMaxPos.x - win->DC.CursorStartPos.x;
     }
     else
     {
@@ -1435,7 +1444,7 @@ void SourceView::RenderSymbolSourceView( uint32_t iptotal, unordered_flat_map<ui
         }
     }
 
-    auto win = ImGui::GetCurrentWindow();
+    const auto win = ImGui::GetCurrentWindowRead();
     if( win->ScrollbarY )
     {
         auto draw = ImGui::GetWindowDrawList();
@@ -1654,7 +1663,8 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
 #endif
 
     const float bottom = m_asmSampleSelect.empty() ? 0 : ImGui::GetFrameHeight();
-    ImGui::BeginChild( "##asmView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove );
+    ImGui::SetNextWindowContentSize( ImVec2( m_asmWidth, 0 ) );
+    ImGui::BeginChild( "##asmView", ImVec2( 0, -bottom ), true, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar );
     if( m_font ) ImGui::PushFont( m_font );
 
     int maxAddrLen;
@@ -1680,6 +1690,8 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
             }
             RenderAsmLine( line, 0, iptotal, ipmax, worker, jumpOut, maxAddrLen, view );
         }
+        const auto win = ImGui::GetCurrentWindowRead();
+        m_asmWidth = win->DC.CursorMaxPos.x - win->DC.CursorStartPos.x;
     }
     else
     {
@@ -1848,7 +1860,7 @@ uint64_t SourceView::RenderSymbolAsmView( uint32_t iptotal, unordered_flat_map<u
 #endif
     }
 
-    auto win = ImGui::GetCurrentWindow();
+    const auto win = ImGui::GetCurrentWindowRead();
     if( win->ScrollbarY )
     {
         auto draw = ImGui::GetWindowDrawList();
@@ -2080,7 +2092,7 @@ void SourceView::RenderLine( const Line& line, int lineNum, uint32_t ipcnt, uint
 {
     const auto ty = ImGui::GetFontSize();
     auto draw = ImGui::GetWindowDrawList();
-    const auto w = ImGui::GetWindowWidth();
+    const auto w = std::max( m_srcWidth, ImGui::GetWindowWidth() );
     const auto wpos = ImGui::GetCursorScreenPos();
     if( m_fileStringIdx == m_hoveredSource && lineNum == m_hoveredLine )
     {
@@ -2257,7 +2269,7 @@ void SourceView::RenderAsmLine( AsmLine& line, uint32_t ipcnt, uint32_t iptotal,
 {
     const auto ty = ImGui::GetFontSize();
     auto draw = ImGui::GetWindowDrawList();
-    const auto w = ImGui::GetWindowWidth();
+    const auto w = std::max( m_asmWidth, ImGui::GetWindowWidth() );
     const auto wpos = ImGui::GetCursorScreenPos();
     if( m_selectedAddressesHover.find( line.addr ) != m_selectedAddressesHover.end() )
     {
@@ -3526,7 +3538,7 @@ void SourceView::Save( const Worker& worker, size_t start, size_t stop )
     assert( start < stop );
 
     nfdchar_t* fn;
-    auto res = NFD_SaveDialog( "asm", nullptr, &fn );
+    auto res = NFD_SaveDialog( "asm", nullptr, &fn, m_gwcb ? m_gwcb() : nullptr );
     if( res == NFD_OKAY )
     {
         FILE* f = nullptr;
