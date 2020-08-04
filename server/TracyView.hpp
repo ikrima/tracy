@@ -56,6 +56,29 @@ class View
         uint64_t count;
     };
 
+    struct Range
+    {
+        void StartFrame() { hiMin = hiMax = false; }
+
+        int64_t min = 0;
+        int64_t max = 0;
+        bool active = false;
+        bool hiMin = false;
+        bool hiMax = false;
+        bool modMin = false;
+        bool modMax = false;
+    };
+
+    struct RangeSlim
+    {
+        bool operator==( const Range& other ) const { return other.active == active && other.min == min && other.max == max; }
+        bool operator!=( const Range& other ) const { return !(*this == other); }
+        void operator=( const Range& other ) { active = other.active; min = other.min; max = other.max; }
+
+        int64_t min, max;
+        bool active = false;
+    };
+
 public:
     struct VisData
     {
@@ -127,8 +150,8 @@ private:
     void DrawNotificationArea();
     bool DrawConnection();
     void DrawFrames();
-    bool DrawZoneFramesHeader();
-    bool DrawZoneFrames( const FrameData& frames );
+    void DrawZoneFramesHeader();
+    void DrawZoneFrames( const FrameData& frames );
     void DrawZones();
     void DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxns, int64_t nspx, const ImVec2& wpos, int offset, int endOffset );
     void DrawSamples( const Vector<SampleData>& vec, bool hover, double pxns, int64_t nspx, const ImVec2& wpos, int offset );
@@ -155,6 +178,7 @@ private:
     int DrawCpuData( int offset, double pxns, const ImVec2& wpos, bool hover, float yMin, float yMax );
     void DrawOptions();
     void DrawMessages();
+    void DrawMessageLine( const MessageData& msg, bool hasCallstack, int& idx );
     void DrawFindZone();
     void DrawStatistics();
     void DrawMemory();
@@ -170,6 +194,7 @@ private:
     void DrawSelectedAnnotation();
     void DrawAnnotationList();
     void DrawSampleParents();
+    void DrawRanges();
 
     void ListMemData( std::vector<const MemEvent*>& vec, std::function<void(const MemEvent*)> DrawAddress, const char* id = nullptr, int64_t startTime = -1 );
 
@@ -188,6 +213,7 @@ private:
     template<typename Adapter, typename V>
     void DrawGpuInfoChildren( const V& children, int64_t ztime );
 
+    void HandleRange( Range& range, int64_t timespan, const ImVec2& wpos, float w );
     void HandleZoneViewMouse( int64_t timespan, const ImVec2& wpos, float w, double& pxns );
 
     uint32_t GetThreadColor( uint64_t thread, int depth );
@@ -329,6 +355,8 @@ private:
     bool m_showMessageImages = false;
     ImGuiTextFilter m_statisticsFilter;
     int m_visibleMessages = 0;
+    size_t m_prevMessages = 0;
+    Vector<uint32_t> m_msgList;
     bool m_disconnectIssued = false;
     DecayValue<uint64_t> m_drawThreadMigrations = 0;
     DecayValue<uint64_t> m_drawThreadHighlight = 0;
@@ -350,6 +378,7 @@ private:
     bool m_showPlayback = false;
     bool m_showCpuDataWindow = false;
     bool m_showAnnotationList = false;
+    bool m_showRanges = false;
 
     enum class CpuDataSortBy
     {
@@ -428,6 +457,9 @@ private:
     void* m_frameTexture = nullptr;
     const void* m_frameTexturePtr = nullptr;
 
+    void* m_frameTextureConn = nullptr;
+    const void* m_frameTextureConnPtr = nullptr;
+
     std::vector<std::unique_ptr<Annotation>> m_annotations;
     UserData m_userData;
 
@@ -437,9 +469,11 @@ private:
     std::vector<SourceRegex> m_sourceSubstitutions;
     bool m_sourceRegexValid = true;
 
+    RangeSlim m_setRangePopup;
+
     struct FindZone {
         enum : uint64_t { Unselected = std::numeric_limits<uint64_t>::max() - 1 };
-        enum class GroupBy : int { Thread, UserText, Callstack, Parent, NoGrouping };
+        enum class GroupBy : int { Thread, UserText, ZoneName, Callstack, Parent, NoGrouping };
         enum class SortBy : int { Order, Count, Time, Mtpc };
         enum class TableSortBy : int { Starttime, Runtime, Name };
 
@@ -484,8 +518,8 @@ private:
         int minBinVal = 1;
         int64_t tmin, tmax;
         bool showZoneInFrames = false;
-        bool limitRange = false;
-        int64_t rangeMin, rangeMax;
+        Range range;
+        RangeSlim rangeSlim;
 
         struct
         {
@@ -540,7 +574,7 @@ private:
         void ShowZone( int16_t srcloc, const char* name )
         {
             show = true;
-            limitRange = false;
+            range.active = false;
             Reset();
             match.emplace_back( srcloc );
             strcpy( pattern, name );
@@ -550,9 +584,9 @@ private:
         {
             assert( limitMin <= limitMax );
             show = true;
-            limitRange = true;
-            rangeMin = limitMin;
-            rangeMax = limitMax;
+            range.active = true;
+            range.min = limitMin;
+            range.max = limitMax;
             Reset();
             match.emplace_back( srcloc );
             strcpy( pattern, name );

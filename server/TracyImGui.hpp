@@ -5,10 +5,14 @@
 #  pragma warning( disable: 4244 )  // conversion from don't care to whatever, possible loss of data 
 #endif
 
+#include <algorithm>
+#include <assert.h>
 #include <stdint.h>
 
 #include "../imgui/imgui.h"
 #include "../imgui/imgui_internal.h"
+
+#include "IconsFontAwesome5.h"
 
 #if !IMGUI_DEFINE_MATH_OPERATORS
 static inline ImVec2 operator+( const ImVec2& l, const ImVec2& r ) { return ImVec2( l.x + r.x, l.y + r.y ); }
@@ -96,6 +100,25 @@ namespace tracy
         }
     }
 
+    static inline bool SmallButtonDisablable( const char* label, bool disabled )
+    {
+        if( disabled )
+        {
+            ImGui::PushStyleColor( ImGuiCol_Button, (ImVec4)ImColor( 0.3f, 0.3f, 0.3f, 1.0f ) );
+            ImGuiContext& g = *GImGui;
+            float backup_padding_y = g.Style.FramePadding.y;
+            g.Style.FramePadding.y = 0.0f;
+            ImGui::ButtonEx( label, ImVec2( 0, 0 ), ImGuiButtonFlags_Disabled | ImGuiButtonFlags_AlignTextBaseLine );
+            g.Style.FramePadding.y = backup_padding_y;
+            ImGui::PopStyleColor( 1 );
+            return false;
+        }
+        else
+        {
+            return ImGui::SmallButton( label );
+        }
+    }
+
     static inline void DrawTextContrast( ImDrawList* draw, const ImVec2& pos, uint32_t color, const char* text )
     {
         draw->AddText( pos + ImVec2( 1, 1 ), 0xAA000000, text );
@@ -125,6 +148,53 @@ namespace tracy
         if( ImGui::Button( label ) ) toggle = !toggle;
         ImGui::PopStyleVar( 1 );
         if( active ) ImGui::PopStyleColor( 3 );
+    }
+
+    static bool ClipboardButton( int id = 0 )
+    {
+        ImGui::PushStyleColor( ImGuiCol_Border, ImVec4( 0.43f, 0.43f, 0.50f, 0.25f ) );
+        ImGui::PushStyleColor( ImGuiCol_Button, ImVec4( 0.26f, 0.59f, 0.98f, 0.20f ) );
+        ImGui::PushStyleColor( ImGuiCol_ButtonHovered, ImVec4( 0.26f, 0.59f, 0.98f, 0.5f ) );
+        ImGui::PushStyleColor( ImGuiCol_ButtonActive, ImVec4( 0.06f, 0.53f, 0.98f, 0.5f ) );
+        ImGui::PushStyleColor( ImGuiCol_Text, GImGui->Style.Colors[ImGuiCol_TextDisabled] );
+        ImGui::PushID( id );
+        const auto res = ImGui::SmallButton( ICON_FA_CLIPBOARD );
+        ImGui::PopID();
+        ImGui::PopStyleColor( 5 );
+        return res;
+    }
+
+    static void DrawStripedRect( ImDrawList* draw, double x0, double y0, double x1, double y1, double sw, uint32_t color )
+    {
+        assert( x1 >= x0 );
+        assert( y1 >= y0 );
+        assert( sw > 0 );
+
+        const auto ww = ImGui::GetItemRectSize().x;
+        if( x0 > ww || x1 < 0 ) return;
+
+        if( x1 - x0 > ww )
+        {
+            x0 = std::max<double>( 0, x0 );
+            x1 = std::min<double>( ww, x1 );
+        }
+
+        ImGui::PushClipRect( ImVec2( x0, y0 ), ImVec2( x1, y1 ), true );
+
+        const auto rw = x1 - x0;
+        const auto rh = y1 - y0;
+        const auto v0 = ImVec2( x0, y0 - rw );
+        const auto cnt = int( ( rh + rw + sw*2 ) / ( sw*2 ) );
+        for( int i=0; i<cnt; i++ )
+        {
+            draw->PathLineTo( v0 + ImVec2( 0, i*sw*2 ) );
+            draw->PathLineTo( v0 + ImVec2( rw, i*sw*2 + rw ) );
+            draw->PathLineTo( v0 + ImVec2( rw, i*sw*2 + rw + sw ) );
+            draw->PathLineTo( v0 + ImVec2( 0, i*sw*2 + sw ) );
+            draw->PathFillConvex( color );
+        }
+
+        ImGui::PopClipRect();
     }
 
 }

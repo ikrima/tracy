@@ -31,6 +31,7 @@
 #include "TracyFileRead.hpp"
 #include "TracyFileWrite.hpp"
 #include "TracyFilesystem.hpp"
+#include "TracyMouse.hpp"
 #include "TracyPopcnt.hpp"
 #include "TracyPrint.hpp"
 #include "TracySort.hpp"
@@ -600,6 +601,7 @@ bool View::DrawImpl()
         {
             m_showAnnotationList = true;
         }
+        ToggleButton( ICON_FA_RULER " Limits", m_showRanges );
         ImGui::EndPopup();
     }
     ImGui::SameLine();
@@ -616,6 +618,7 @@ bool View::DrawImpl()
         {
             ImGui::PopStyleColor();
         }
+        if( ImGui::IsItemClicked() ) ImGui::OpenPopup( "GoToFramePopup" );
     }
     ImGui::SameLine();
     if( ImGui::SmallButton( " " ICON_FA_CARET_RIGHT " " ) ) ZoomToNextFrame();
@@ -638,14 +641,6 @@ bool View::DrawImpl()
             ImGui::TextDisabled( "(%s)", RealToString( fd->frames.size() ) );
         }
         ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    if( ImGui::Button( ICON_FA_CROSSHAIRS ) ) ImGui::OpenPopup( "GoToFramePopup" );
-    if( ImGui::IsItemHovered() )
-    {
-        ImGui::BeginTooltip();
-        ImGui::TextUnformatted( "Go to frame" );
-        ImGui::EndTooltip();
     }
     if( ImGui::BeginPopup( "GoToFramePopup" ) )
     {
@@ -691,6 +686,10 @@ bool View::DrawImpl()
             ImGui::BeginTooltip();
             ImGui::Text( "Time span" );
             ImGui::EndTooltip();
+            if( ImGui::IsItemClicked( 2 ) )
+            {
+                ZoomToRange( 0, m_worker.GetLastTime() );
+            }
         }
         ImGui::SameLine();
         dx = ImGui::GetCursorPosX() - cx;
@@ -765,6 +764,23 @@ bool View::DrawImpl()
     if( m_selectedAnnotation ) DrawSelectedAnnotation();
     if( m_showAnnotationList ) DrawAnnotationList();
     if( m_sampleParents.symAddr != 0 ) DrawSampleParents();
+    if( m_showRanges ) DrawRanges();
+
+    if( m_setRangePopup.active )
+    {
+        m_setRangePopup.active = false;
+        ImGui::OpenPopup( "SetZoneRange" );
+    }
+    if( ImGui::BeginPopup( "SetZoneRange" ) )
+    {
+        if( ImGui::Selectable( ICON_FA_SEARCH " Limit find zone time range" ) )
+        {
+            m_findZone.range.active = true;
+            m_findZone.range.min = m_setRangePopup.min;
+            m_findZone.range.max = m_setRangePopup.max;
+        }
+        ImGui::EndPopup();
+    }
 
     if( m_zoomAnim.active )
     {
@@ -894,11 +910,11 @@ void View::DrawNotificationArea()
         if( ImGui::IsItemHovered() )
         {
             CrashTooltip();
-            if( ImGui::IsMouseClicked( 0 ) )
+            if( IsMouseClicked( 0 ) )
             {
                 m_showInfo = true;
             }
-            if( ImGui::IsMouseClicked( 2 ) )
+            if( IsMouseClicked( 2 ) )
             {
                 CenterAtTime( crash.time );
             }
@@ -913,7 +929,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "Displaying empty labels." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawEmptyLabels = false;
+            if( IsMouseClicked( 0 ) ) m_vd.drawEmptyLabels = false;
         }
     }
     if( !m_vd.drawContextSwitches )
@@ -925,7 +941,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "Context switches are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawContextSwitches = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawContextSwitches = true;
         }
     }
     if( !m_vd.drawCpuData )
@@ -937,7 +953,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "CPU data is hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawCpuData = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawCpuData = true;
         }
     }
     if( !m_vd.drawGpuZones )
@@ -949,7 +965,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "GPU zones are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawGpuZones = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawGpuZones = true;
         }
     }
     if( !m_vd.drawZones )
@@ -961,7 +977,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "CPU zones are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawZones = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawZones = true;
         }
     }
 #ifndef TRACY_NO_STATISTICS
@@ -974,7 +990,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "Ghost zones are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.ghostZones = true;
+            if( IsMouseClicked( 0 ) ) m_vd.ghostZones = true;
         }
     }
 #endif
@@ -987,7 +1003,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "Locks are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawLocks = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawLocks = true;
         }
     }
     if( !m_vd.drawPlots )
@@ -999,7 +1015,7 @@ void View::DrawNotificationArea()
             ImGui::BeginTooltip();
             ImGui::TextUnformatted( "Plots are hidden." );
             ImGui::EndTooltip();
-            if( ImGui::IsMouseClicked( 0 ) ) m_vd.drawPlots = true;
+            if( IsMouseClicked( 0 ) ) m_vd.drawPlots = true;
         }
     }
     {
@@ -1021,7 +1037,7 @@ void View::DrawNotificationArea()
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted( "Some timeline entries are hidden." );
                 ImGui::EndTooltip();
-                if( ImGui::IsMouseClicked( 0 ) ) m_showOptions = true;
+                if( IsMouseClicked( 0 ) ) m_showOptions = true;
             }
         }
     }
@@ -1118,6 +1134,29 @@ bool View::DrawConnection()
         }
     }
 
+    const auto& fis = m_worker.GetFrameImages();
+    if( !fis.empty() )
+    {
+        const auto scale = ImGui::GetTextLineHeight() / 15.f * 0.5f;
+        const auto& fi = fis.back();
+        if( fi != m_frameTextureConnPtr )
+        {
+            if( !m_frameTextureConn ) m_frameTextureConn = MakeTexture();
+            UpdateTexture( m_frameTextureConn, m_worker.UnpackFrameImage( *fi ), fi->w, fi->h );
+            m_frameTextureConnPtr = fi;
+        }
+        ImGui::Separator();
+        if( fi->flip )
+        {
+            ImGui::Image( m_frameTextureConn, ImVec2( fi->w * scale, fi->h * scale ), ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
+        }
+        else
+        {
+            ImGui::Image( m_frameTextureConn, ImVec2( fi->w * scale, fi->h * scale ) );
+        }
+    }
+
+    ImGui::Separator();
     if( ImGui::Button( ICON_FA_SAVE " Save trace" ) && m_saveThreadState.load( std::memory_order_relaxed ) == SaveThreadState::Inert )
     {
 #ifndef TRACY_NO_FILESELECTOR
@@ -1336,10 +1375,10 @@ void View::DrawFrames()
 
     if( hover )
     {
-        if( ImGui::IsMouseDragging( 1, 0 ) )
+        if( IsMouseDragging( 1 ) )
         {
             m_pause = true;
-            const auto delta = ImGui::GetMouseDragDelta( 1, 0 ).x;
+            const auto delta = GetMouseDragDelta( 1 ).x;
             if( abs( delta ) >= fwidth )
             {
                 const auto d = (int)delta / fwidth;
@@ -1374,6 +1413,8 @@ void View::DrawFrames()
                     TextFocused( "Max frame time:", TimeToString( f ) );
                     ImGui::SameLine();
                     ImGui::TextDisabled( "(%.1f FPS)", 1000000000.0 / f );
+
+                    if( IsMouseClickReleased( 1 ) ) m_setRangePopup = RangeSlim { m_worker.GetFrameTime( *m_frames, sel ), m_worker.GetFrameTime( *m_frames, sel + g - 1 ), true };
                 }
                 else
                 {
@@ -1453,7 +1494,7 @@ void View::DrawFrames()
 
                 if( io.KeyCtrl )
                 {
-                    if( fi && ImGui::IsMouseDown( 0 ) )
+                    if( fi && IsMouseDown( 0 ) )
                     {
                         m_showPlayback = true;
                         m_playback.pause = true;
@@ -1462,7 +1503,7 @@ void View::DrawFrames()
                 }
                 else
                 {
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         m_pause = true;
                         m_zoomAnim.active = false;
@@ -1471,13 +1512,15 @@ void View::DrawFrames()
                         m_vd.zvEnd = m_worker.GetFrameEnd( *m_frames, sel + group - 1 );
                         if( m_vd.zvStart == m_vd.zvEnd ) m_vd.zvStart--;
                     }
-                    else if( ImGui::IsMouseDragging( 0 ) )
+                    else if( IsMouseDragging( 0 ) )
                     {
                         const auto t0 = std::min( m_vd.zvStart, m_worker.GetFrameBegin( *m_frames, sel ) );
                         const auto t1 = std::max( m_vd.zvEnd, m_worker.GetFrameEnd( *m_frames, sel + group - 1 ) );
                         ZoomToRange( t0, t1 );
                     }
                 }
+
+                if( IsMouseClickReleased( 1 ) ) m_setRangePopup = RangeSlim { m_worker.GetFrameBegin( *m_frames, sel ), m_worker.GetFrameEnd( *m_frames, sel + group - 1 ), true };
             }
 
             if( m_pause && wheel != 0 )
@@ -1682,6 +1725,85 @@ void View::DrawFrames()
     draw->AddLine( wpos + ImVec2( 0, round( Height - Height * BestTime / MaxFrameTime ) ), wpos + ImVec2( w, round( Height - Height * BestTime / MaxFrameTime ) ), 0x44DD9900 );
 }
 
+void View::HandleRange( Range& range, int64_t timespan, const ImVec2& wpos, float w )
+{
+    if( !IsMouseDown( 0 ) ) range.modMin = range.modMax = false;
+    if( !range.active ) return;
+    auto& io = ImGui::GetIO();
+
+    if( range.modMin )
+    {
+        const auto nspx = double( timespan ) / w;
+        range.min = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
+        range.hiMin = true;
+        ConsumeMouseEvents( 0 );
+        ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeEW );
+        if( range.min > range.max )
+        {
+            std::swap( range.min, range.max );
+            std::swap( range.hiMin, range.hiMax );
+            std::swap( range.modMin, range.modMax );
+        }
+    }
+    else if( range.modMax )
+    {
+        const auto nspx = double( timespan ) / w;
+        range.max = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
+        range.hiMax = true;
+        ConsumeMouseEvents( 0 );
+        ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeEW );
+        if( range.min > range.max )
+        {
+            std::swap( range.min, range.max );
+            std::swap( range.hiMin, range.hiMax );
+            std::swap( range.modMin, range.modMax );
+        }
+    }
+    else
+    {
+        const auto pxns = w / double( timespan );
+        const auto px0 = ( range.min - m_vd.zvStart ) * pxns;
+        if( abs( px0 - ( io.MousePos.x - wpos.x ) ) < 3 )
+        {
+            range.hiMin = true;
+            ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeEW );
+            if( IsMouseClicked( 0 ) )
+            {
+                range.modMin = true;
+                range.min = m_vd.zvStart + ( io.MousePos.x - wpos.x ) / pxns;
+                ConsumeMouseEvents( 0 );
+                if( range.min > range.max )
+                {
+                    std::swap( range.min, range.max );
+                    std::swap( range.hiMin, range.hiMax );
+                    std::swap( range.modMin, range.modMax );
+                }
+            }
+        }
+        else
+        {
+            const auto px1 = ( range.max - m_vd.zvStart ) * pxns;
+            if( abs( px1 - ( io.MousePos.x - wpos.x ) ) < 3 )
+            {
+                range.hiMax = true;
+                ImGui::SetMouseCursor( ImGuiMouseCursor_ResizeEW );
+                if( IsMouseClicked( 0 ) )
+                {
+                    range.modMax = true;
+                    range.max = m_vd.zvStart + ( io.MousePos.x - wpos.x ) / pxns;
+                    ConsumeMouseEvents( 0 );
+                    if( range.min > range.max )
+                    {
+                        std::swap( range.min, range.max );
+                        std::swap( range.hiMin, range.hiMax );
+                        std::swap( range.modMin, range.modMax );
+                    }
+                }
+            }
+        }
+    }
+}
+
 void View::HandleZoneViewMouse( int64_t timespan, const ImVec2& wpos, float w, double& pxns )
 {
     assert( timespan > 0 );
@@ -1689,12 +1811,12 @@ void View::HandleZoneViewMouse( int64_t timespan, const ImVec2& wpos, float w, d
 
     const auto nspx = double( timespan ) / w;
 
-    if( ImGui::IsMouseClicked( 0 ) )
+    if( IsMouseClicked( 0 ) )
     {
         m_highlight.active = true;
         m_highlight.start = m_highlight.end = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
     }
-    else if( ImGui::IsMouseDragging( 0, 0 ) )
+    else if( IsMouseDragging( 0 ) )
     {
         m_highlight.end = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
     }
@@ -1715,12 +1837,12 @@ void View::HandleZoneViewMouse( int64_t timespan, const ImVec2& wpos, float w, d
         m_highlight.active = false;
     }
 
-    if( ImGui::IsMouseClicked( 2 ) )
+    if( IsMouseClicked( 2 ) )
     {
         m_highlightZoom.active = true;
         m_highlightZoom.start = m_highlightZoom.end = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
     }
-    else if( ImGui::IsMouseDragging( 2, 0 ) )
+    else if( IsMouseDragging( 2 ) )
     {
         m_highlightZoom.end = m_vd.zvStart + ( io.MousePos.x - wpos.x ) * nspx;
     }
@@ -1762,12 +1884,12 @@ void View::HandleZoneViewMouse( int64_t timespan, const ImVec2& wpos, float w, d
     }
 
     const auto hwheel_delta = io.MouseWheelH * 100.f;
-    if( ImGui::IsMouseDragging( 1, 0 ) ||  hwheel_delta != 0 )
+    if( IsMouseDragging( 1 ) || hwheel_delta != 0 )
     {
         m_pause = true;
         m_zoomAnim.active = false;
         if( !m_playback.pause && m_playback.sync ) m_playback.pause = true;
-        const auto delta = ImGui::GetMouseDragDelta( 1, 0 );
+        const auto delta = GetMouseDragDelta( 1 );
         const auto dpx = int64_t( (delta.x * nspx) + (hwheel_delta * nspx));
         if( dpx != 0 )
         {
@@ -1879,7 +2001,7 @@ const char* View::GetFrameText( const FrameData& fd, int i, uint64_t ftime, uint
     return buf;
 }
 
-bool View::DrawZoneFramesHeader()
+void View::DrawZoneFramesHeader()
 {
     const auto wpos = ImGui::GetCursorScreenPos();
     const auto w = ImGui::GetWindowContentRegionWidth() - ImGui::GetStyle().ScrollbarSize;
@@ -1890,12 +2012,9 @@ bool View::DrawZoneFramesHeader()
     const auto ty05 = round( ty * 0.5f );
 
     ImGui::InvisibleButton( "##zoneFrames", ImVec2( w, ty * 1.5f ) );
-    bool hover = ImGui::IsItemHovered();
 
     auto timespan = m_vd.zvEnd - m_vd.zvStart;
     auto pxns = w / double( timespan );
-
-    if( hover ) HandleZoneViewMouse( timespan, wpos, w, pxns );
 
     {
         const auto nspx = 1.0 / pxns;
@@ -1947,8 +2066,6 @@ bool View::DrawZoneFramesHeader()
             tt += step;
         }
     }
-
-    return hover;
 }
 
 static uint32_t DarkenColor( uint32_t color )
@@ -2019,7 +2136,7 @@ static uint32_t GetColorMuted( uint32_t color, bool active )
     }
 }
 
-bool View::DrawZoneFrames( const FrameData& frames )
+void View::DrawZoneFrames( const FrameData& frames )
 {
     const auto wpos = ImGui::GetCursorScreenPos();
     const auto w = ImGui::GetWindowContentRegionWidth() - ImGui::GetStyle().ScrollbarSize;
@@ -2035,12 +2152,10 @@ bool View::DrawZoneFrames( const FrameData& frames )
     auto timespan = m_vd.zvEnd - m_vd.zvStart;
     auto pxns = w / double( timespan );
 
-    if( hover ) HandleZoneViewMouse( timespan, wpos, w, pxns );
-
     const auto nspx = 1.0 / pxns;
 
     const std::pair <int, int> zrange = m_worker.GetFrameRange( frames, m_vd.zvStart, m_vd.zvEnd );
-    if( zrange.first < 0 ) return hover;
+    if( zrange.first < 0 ) return;
 
     int64_t prev = -1;
     int64_t prevEnd = -1;
@@ -2068,6 +2183,7 @@ bool View::DrawZoneFrames( const FrameData& frames )
             if( ImGui::IsMouseHoveringRect( wpos + ImVec2( x0, 0 ), wpos + ImVec2( x1, ty ) ) )
             {
                 tooltipDisplayed = true;
+                if( IsMouseClickReleased( 1 ) ) m_setRangePopup = RangeSlim { fbegin, fend, true };
 
                 ImGui::BeginTooltip();
                 ImGui::TextUnformatted( GetFrameText( frames, i, ftime, m_worker.GetFrameOffset() ) );
@@ -2094,7 +2210,7 @@ bool View::DrawZoneFrames( const FrameData& frames )
                         ImGui::Image( m_frameTexture, ImVec2( fi->w * scale, fi->h * scale ) );
                     }
 
-                    if( ImGui::GetIO().KeyCtrl && ImGui::IsMouseClicked( 0 ) )
+                    if( ImGui::GetIO().KeyCtrl && IsMouseClicked( 0 ) )
                     {
                         m_showPlayback = true;
                         m_playback.pause = true;
@@ -2103,7 +2219,7 @@ bool View::DrawZoneFrames( const FrameData& frames )
                 }
                 ImGui::EndTooltip();
 
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToRange( fbegin, fend );
                 }
@@ -2170,6 +2286,13 @@ bool View::DrawZoneFrames( const FrameData& frames )
         auto tx = ImGui::CalcTextSize( buf ).x;
         uint32_t color = ( frames.name == 0 && i == 0 ) ? redColor : activeColor;
 
+        if( fsz - 7 <= tx )
+        {
+            static char tmp[256];
+            sprintf( tmp, "%s (%s)", RealToString( i ), TimeToString( ftime ) );
+            buf = tmp;
+            tx = ImGui::CalcTextSize( buf ).x;
+        }
         if( fsz - 7 <= tx )
         {
             buf = TimeToString( ftime );
@@ -2239,13 +2362,11 @@ bool View::DrawZoneFrames( const FrameData& frames )
             ImGui::TextUnformatted( frames.name == 0 ? "Frames" : m_worker.GetString( frames.name ) );
             ImGui::EndTooltip();
         }
-        if( ImGui::IsMouseClicked( 0 ) )
+        if( IsMouseClicked( 0 ) )
         {
             m_frames = &frames;
         }
     }
-
-    return hover;
 }
 
 static float AdjustThreadPosition( View::VisData& vis, float wy, int& offset )
@@ -2299,6 +2420,7 @@ void View::DrawZones()
     m_cpuDataThread.Decay( 0 );
     m_zoneHover = nullptr;
     m_zoneHover2.Decay( nullptr );
+    m_findZone.range.StartFrame();
 
     if( m_vd.zvStart == m_vd.zvEnd ) return;
     assert( m_vd.zvStart < m_vd.zvEnd );
@@ -2329,13 +2451,22 @@ void View::DrawZones()
         }
     }
 
-    bool drawMouseLine = DrawZoneFramesHeader();
+    const auto winpos = ImGui::GetWindowPos();
+    const auto winsize = ImGui::GetWindowSize();
+    const bool drawMouseLine = ImGui::IsWindowHovered( ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem ) && ImGui::IsMouseHoveringRect( winpos, winpos + winsize, false );
+    if( drawMouseLine )
+    {
+        HandleRange( m_findZone.range, timespan, ImGui::GetCursorScreenPos(), w );
+        HandleZoneViewMouse( timespan, ImGui::GetCursorScreenPos(), w, pxns );
+    }
+
+    DrawZoneFramesHeader();
     auto& frames = m_worker.GetFrames();
     for( auto fd : frames )
     {
         if( Vis( fd ).visible )
         {
-            drawMouseLine |= DrawZoneFrames( *fd );
+            DrawZoneFrames( *fd );
         }
     }
 
@@ -2350,12 +2481,6 @@ void View::DrawZones()
     ImGui::InvisibleButton( "##zones", ImVec2( w, h ) );
     bool hover = ImGui::IsItemHovered();
     draw = ImGui::GetWindowDrawList();
-
-    if( hover )
-    {
-        drawMouseLine = true;
-        HandleZoneViewMouse( timespan, wpos, w, pxns );
-    }
 
     const auto nspx = 1.0 / pxns;
 
@@ -2484,11 +2609,11 @@ void View::DrawZones()
 
                 if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, oldOffset ), wpos + ImVec2( ty + ImGui::CalcTextSize( buf ).x, oldOffset + ty ) ) )
                 {
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         showFull = !showFull;
                     }
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         int64_t t0 = std::numeric_limits<int64_t>::max();
                         int64_t t1 = std::numeric_limits<int64_t>::min();
@@ -2595,16 +2720,9 @@ void View::DrawZones()
                         }
                     }
                     TextFocused( "Zone count:", RealToString( v->count ) );
-                    //TextFocused( "Top-level zones:", RealToString( v->timeline.size() ) );
                     if( isMultithreaded )
                     {
                         TextFocused( "Timestamp accuracy:", TimeToString( v->period ) );
-                    }
-                    else
-                    {
-                        TextDisabledUnformatted( "Query accuracy bits:" );
-                        ImGui::SameLine();
-                        ImGui::Text( "%i", v->accuracyBits );
                     }
                     ImGui::EndTooltip();
                 }
@@ -2782,12 +2900,12 @@ void View::DrawZones()
                         ImGui::EndTooltip();
                         m_msgHighlight = *msgit;
 
-                        if( ImGui::IsMouseClicked( 0 ) )
+                        if( IsMouseClicked( 0 ) )
                         {
                             m_showMessages = true;
                             m_msgToFocus = *msgit;
                         }
-                        if( ImGui::IsMouseClicked( 2 ) )
+                        if( IsMouseClicked( 2 ) )
                         {
                             CenterAtTime( (*msgit)->time );
                         }
@@ -2809,11 +2927,11 @@ void View::DrawZones()
                     if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( px - (ty - to) * 0.5 - 1, oldOffset ), wpos + ImVec2( px + (ty - to) * 0.5 + 1, oldOffset + ty ) ) )
                     {
                         CrashTooltip();
-                        if( ImGui::IsMouseClicked( 0 ) )
+                        if( IsMouseClicked( 0 ) )
                         {
                             m_showInfo = true;
                         }
-                        if( ImGui::IsMouseClicked( 2 ) )
+                        if( IsMouseClicked( 2 ) )
                         {
                             CenterAtTime( crash.time );
                         }
@@ -2860,7 +2978,7 @@ void View::DrawZones()
 #ifndef TRACY_NO_STATISTICS
                 if( hasGhostZones && !v->timeline.empty() && ImGui::IsMouseHoveringRect( wpos + ImVec2( 1.5f * ty + txtsz.x, oldOffset ), wpos + ImVec2( 1.5f * ty + txtsz.x + ghostSz, oldOffset + ty ) ) )
                 {
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         auto& vis = Vis( v );
                         vis.ghost = !vis.ghost;
@@ -2977,11 +3095,11 @@ void View::DrawZones()
                     }
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         Vis( v ).showFull = !showFull;
                     }
-                    if( last >= 0 && ImGui::IsMouseClicked( 2 ) )
+                    if( last >= 0 && IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( first, last );
                     }
@@ -3042,7 +3160,7 @@ void View::DrawZones()
             {
                 draw->AddCircleFilled( linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th * 2, th * 2 ), th, 0x88AABB22 );
                 draw->AddCircle( linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th * 2, th * 2 ), th, 0xAAAABB22 );
-                if( drawMouseLine && ImGui::IsMouseClicked( 0 ) && ImGui::IsMouseHoveringRect( linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th, th ), linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th * 3, th * 3 ) ) )
+                if( drawMouseLine && IsMouseClicked( 0 ) && ImGui::IsMouseHoveringRect( linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th, th ), linepos + ImVec2( ( ann->start - m_vd.zvStart ) * pxns + th * 3, th * 3 ) ) )
                 {
                     m_selectedAnnotation = ann.get();
                 }
@@ -3080,12 +3198,13 @@ void View::DrawZones()
         draw->AddRect( ImVec2( wpos.x + px0, linepos.y ), ImVec2( wpos.x + px1, linepos.y + lineh ), 0x4488DD88 );
     }
 
-    if( m_findZone.show && m_findZone.limitRange )
+    if( m_findZone.range.active && ( m_findZone.show || m_showRanges ) )
     {
-        const auto px0 = ( m_findZone.rangeMin - m_vd.zvStart ) * pxns;
-        const auto px1 = std::max( px0 + std::max( 1.0, pxns * 0.5 ), ( m_findZone.rangeMax - m_vd.zvStart ) * pxns );
-        draw->AddRectFilled( ImVec2( wpos.x + px0, linepos.y ), ImVec2( wpos.x + px1, linepos.y + lineh ), 0x1188DDDD );
-        draw->AddRect( ImVec2( wpos.x + px0, linepos.y ), ImVec2( wpos.x + px1, linepos.y + lineh ), 0x2288DDDD );
+        const auto px0 = ( m_findZone.range.min - m_vd.zvStart ) * pxns;
+        const auto px1 = std::max( px0 + std::max( 1.0, pxns * 0.5 ), ( m_findZone.range.max - m_vd.zvStart ) * pxns );
+        DrawStripedRect( draw, wpos.x + px0, linepos.y, wpos.x + px1, linepos.y + lineh, 10 * ImGui::GetTextLineHeight() / 15.f, 0x2288DDDD );
+        draw->AddLine( ImVec2( wpos.x + px0, linepos.y ), ImVec2( wpos.x + px0, linepos.y + lineh ), m_findZone.range.hiMin ? 0x9988DDDD : 0x3388DDDD, m_findZone.range.hiMin ? 2 : 1 );
+        draw->AddLine( ImVec2( wpos.x + px1, linepos.y ), ImVec2( wpos.x + px1, linepos.y + lineh ), m_findZone.range.hiMax ? 0x9988DDDD : 0x3388DDDD, m_findZone.range.hiMax ? 2 : 1 );
     }
 
     if( m_highlight.active && m_highlight.start != m_highlight.end )
@@ -3309,7 +3428,7 @@ void View::DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxn
                     TextDisabledUnformatted( DecodeContextSwitchState( pit->State() ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( pit->End(), ev.WakeupVal() );
                     }
@@ -3320,7 +3439,7 @@ void View::DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxn
                     TextFocused( "Thread is", "waking up" );
                     TextFocused( "Scheduling delay:", TimeToString( ev.Start() - ev.WakeupVal() ) );
                     TextFocused( "CPU:", RealToString( ev.Cpu() ) );
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( pit->End(), ev.WakeupVal() );
                     }
@@ -3364,7 +3483,7 @@ void View::DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxn
                     TextFocused( "CPU:", RealToString( ev.Cpu() ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( ev.Start(), rend );
                     }
@@ -3381,7 +3500,7 @@ void View::DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxn
                     TextFocused( "Time:", TimeToString( rend - ev.Start() ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( ev.Start(), rend );
                     }
@@ -3402,7 +3521,7 @@ void View::DrawContextSwitches( const ContextSwitch* ctx, bool hover, double pxn
                 TextFocused( "CPU:", RealToString( ev.Cpu() ) );
                 ImGui::EndTooltip();
 
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToRange( ev.Start(), end );
                 }
@@ -3465,7 +3584,7 @@ void View::DrawSamples( const Vector<SampleData>& vec, bool hover, double pxns, 
             {
                 tooltipDisplayed = true;
                 CallstackTooltip( it->callstack.Val() );
-                if( ImGui::IsMouseClicked( 0 ) )
+                if( IsMouseClicked( 0 ) )
                 {
                     m_callstackInfoWindow = it->callstack.Val();
                 }
@@ -3481,7 +3600,7 @@ void View::DrawSamples( const Vector<SampleData>& vec, bool hover, double pxns, 
                 TextFocused( "Number of samples:", RealToString( num ) );
                 ImGui::EndTooltip();
 
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     const auto prev = next-1;
                     ZoomToRange( it->time.Val(), prev->time.Val() + 1 );
@@ -3565,7 +3684,7 @@ int View::DrawGhostLevel( const Vector<GhostZone>& vec, bool hover, double pxns,
                 TextFocused( "Execution time:", TimeToString( rend - ev.start.Val() ) );
                 ImGui::EndTooltip();
 
-                if( ImGui::IsMouseClicked( 2 ) && rend - ev.start.Val() > 0 )
+                if( IsMouseClicked( 2 ) && rend - ev.start.Val() > 0 )
                 {
                     ZoomToRange( ev.start.Val(), rend );
                 }
@@ -3626,7 +3745,7 @@ int View::DrawGhostLevel( const Vector<GhostZone>& vec, bool hover, double pxns,
                     ImGui::Separator();
                     TextFocused( "Execution time:", TimeToString( ev.end.Val() - ev.start.Val() ) );
                     ImGui::EndTooltip();
-                    if( !m_zoomAnim.active && ImGui::IsMouseClicked( 2 ) )
+                    if( !m_zoomAnim.active && IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( ev.start.Val(), ev.end.Val() );
                     }
@@ -3696,11 +3815,11 @@ int View::DrawGhostLevel( const Vector<GhostZone>& vec, bool hover, double pxns,
                     TextFocused( "Execution time:", TimeToString( ev.end.Val() - ev.start.Val() ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         ViewDispatch( file, line, sym.symAddr );
                     }
-                    else if( !m_zoomAnim.active && ImGui::IsMouseClicked( 2 ) )
+                    else if( !m_zoomAnim.active && IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( ev.start.Val(), ev.end.Val() );
                     }
@@ -3860,6 +3979,7 @@ int View::DrawZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx, co
             DrawZigZag( draw, wpos + ImVec2( 0, offset + ty/2 ), std::max( px0, -10.0 ), std::min( std::max( px1, px0+MinVisSize ), double( w + 10 ) ), ty/4, DarkenColor( color ) );
             if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( std::max( px0, -10.0 ), offset ), wpos + ImVec2( std::min( std::max( px1, px0+MinVisSize ), double( w + 10 ) ), offset + ty ) ) )
             {
+                if( IsMouseClickReleased( 1 ) ) m_setRangePopup = RangeSlim { ev.Start(), rend, true };
                 if( num > 1 )
                 {
                     ImGui::BeginTooltip();
@@ -3868,7 +3988,7 @@ int View::DrawZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx, co
                     TextFocused( "Execution time:", TimeToString( rend - ev.Start() ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 2 ) && rend - ev.Start() > 0 )
+                    if( IsMouseClicked( 2 ) && rend - ev.Start() > 0 )
                     {
                         ZoomToRange( ev.Start(), rend );
                     }
@@ -3877,11 +3997,11 @@ int View::DrawZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx, co
                 {
                     ZoneTooltip( ev );
 
-                    if( ImGui::IsMouseClicked( 2 ) && rend - ev.Start() > 0 )
+                    if( IsMouseClicked( 2 ) && rend - ev.Start() > 0 )
                     {
                         ZoomToZone( ev );
                     }
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         if( ImGui::GetIO().KeyCtrl )
                         {
@@ -3995,12 +4115,13 @@ int View::DrawZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx, co
             if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( px0, offset ), wpos + ImVec2( px1, offset + tsz.y ) ) )
             {
                 ZoneTooltip( ev );
+                if( IsMouseClickReleased( 1 ) ) m_setRangePopup = RangeSlim { ev.Start(), m_worker.GetZoneEnd( ev ), true };
 
-                if( !m_zoomAnim.active && ImGui::IsMouseClicked( 2 ) )
+                if( !m_zoomAnim.active && IsMouseClicked( 2 ) )
                 {
                     ZoomToZone( ev );
                 }
-                if( ImGui::IsMouseClicked( 0 ) )
+                if( IsMouseClicked( 0 ) )
                 {
                     if( ImGui::GetIO().KeyCtrl )
                     {
@@ -4176,7 +4297,7 @@ int View::DrawGpuZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx,
                     TextFocused( "Execution time:", TimeToString( rend - start ) );
                     ImGui::EndTooltip();
 
-                    if( ImGui::IsMouseClicked( 2 ) && rend - start > 0 )
+                    if( IsMouseClicked( 2 ) && rend - start > 0 )
                     {
                         ZoomToRange( start, rend );
                     }
@@ -4186,11 +4307,11 @@ int View::DrawGpuZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx,
                     const auto zoneThread = thread != 0 ? thread : m_worker.DecompressThread( ev.Thread() );
                     ZoneTooltip( ev );
 
-                    if( ImGui::IsMouseClicked( 2 ) && rend - start > 0 )
+                    if( IsMouseClicked( 2 ) && rend - start > 0 )
                     {
                         ZoomToZone( ev );
                     }
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         ShowZoneInfo( ev, zoneThread );
                     }
@@ -4255,11 +4376,11 @@ int View::DrawGpuZoneLevel( const V& vec, bool hover, double pxns, int64_t nspx,
                 const auto zoneThread = thread != 0 ? thread : m_worker.DecompressThread( ev.Thread() );
                 ZoneTooltip( ev );
 
-                if( !m_zoomAnim.active && ImGui::IsMouseClicked( 2 ) )
+                if( !m_zoomAnim.active && IsMouseClicked( 2 ) )
                 {
                     ZoomToZone( ev );
                 }
-                if( ImGui::IsMouseClicked( 0 ) )
+                if( IsMouseClicked( 0 ) )
                 {
                     ShowZoneInfo( ev, zoneThread );
                 }
@@ -4628,11 +4749,11 @@ void View::DrawLockHeader( uint32_t id, const LockMap& lockmap, const SourceLoca
             TextFocused( "Lock events:", RealToString( lockmap.timeline.size() ) );
             ImGui::EndTooltip();
 
-            if( ImGui::IsMouseClicked( 0 ) )
+            if( IsMouseClicked( 0 ) )
             {
                 m_lockInfoWindow = id;
             }
-            if( ImGui::IsMouseClicked( 2 ) )
+            if( IsMouseClicked( 2 ) )
             {
                 ZoomToRange( range.start, range.end );
             }
@@ -4834,11 +4955,11 @@ int View::DrawLocks( uint64_t tid, bool hover, double pxns, const ImVec2& wpos, 
                 bool itemHovered = hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( std::max( px0, -10.0 ), offset ), wpos + ImVec2( std::min( pxend, double( w + 10 ) ), offset + ty ) );
                 if( itemHovered )
                 {
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         m_lockInfoWindow = v.first;
                     }
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToRange( t0, t1 );
                     }
@@ -5257,7 +5378,7 @@ int View::DrawCpuData( int offset, double pxns, const ImVec2& wpos, bool hover, 
         DrawTextContrast( draw, wpos + ImVec2( ty, offset ), showFull ? 0xFFDD88DD : 0xFF6E446E, "CPU data" );
         draw->AddLine( wpos + ImVec2( 0, offset + ty - 1 ), wpos + ImVec2( w, offset + ty - 1 ), 0x66DD88DD );
 
-        if( hover && ImGui::IsMouseClicked( 0 ) && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, offset ), wpos + ImVec2( ty + txtx, offset + ty ) ) )
+        if( hover && IsMouseClicked( 0 ) && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, offset ), wpos + ImVec2( ty + txtx, offset + ty ) ) )
         {
             showFull = !showFull;
         }
@@ -5444,7 +5565,7 @@ int View::DrawCpuData( int offset, double pxns, const ImVec2& wpos, bool hover, 
                                     ImGui::EndTooltip();
                                     ImGui::PushFont( m_smallFont );
 
-                                    if( ImGui::IsMouseClicked( 2 ) )
+                                    if( IsMouseClicked( 2 ) )
                                     {
                                         ZoomToRange( start, rend );
                                     }
@@ -5566,7 +5687,7 @@ int View::DrawCpuData( int offset, double pxns, const ImVec2& wpos, bool hover, 
                                     ImGui::EndTooltip();
                                     ImGui::PushFont( m_smallFont );
 
-                                    if( ImGui::IsMouseClicked( 2 ) )
+                                    if( IsMouseClicked( 2 ) )
                                     {
                                         ZoomToRange( start, end );
                                     }
@@ -5758,11 +5879,11 @@ int View::DrawPlots( int offset, double pxns, const ImVec2& wpos, bool hover, fl
                 }
                 ImGui::EndTooltip();
 
-                if( ImGui::IsMouseClicked( 0 ) )
+                if( IsMouseClicked( 0 ) )
                 {
                     showFull = !showFull;
                 }
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToRange( first, last );
                 }
@@ -6123,7 +6244,7 @@ void View::DrawPlotPoint( const ImVec2& wpos, float x, float y, int offset, uint
 
                     m_memoryAllocHover = std::distance( mem.data.begin(), ev );
                     m_memoryAllocHoverWait = 2;
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         m_memoryAllocInfoWindow = m_memoryAllocHover;
                     }
@@ -6512,26 +6633,55 @@ void View::DrawZoneInfoWindow()
             ImGui::SameLine();
             ImGui::TextDisabled( "(%s)", m_worker.GetString( srcloc.name ) );
         }
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) )
+        {
+            if( srcloc.name.active )
+            {
+                char tmp[1024];
+                sprintf( tmp, "%s (%s)", m_worker.GetString( m_worker.GetZoneExtra( ev ).name ), m_worker.GetString( srcloc.name ) );
+                ImGui::SetClipboardText( tmp );
+            }
+            else
+            {
+                ImGui::SetClipboardText( m_worker.GetString( m_worker.GetZoneExtra( ev ).name ) );
+            }
+        }
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+        ImGui::SameLine();
+        if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     else if( srcloc.name.active )
     {
         if( m_bigFont ) ImGui::PushFont( m_bigFont );
         TextFocused( "Zone name:", m_worker.GetString( srcloc.name ) );
         if( m_bigFont ) ImGui::PopFont();
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.name ) );
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+        ImGui::SameLine();
+        if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     else
     {
         if( m_bigFont ) ImGui::PushFont( m_bigFont );
         TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
         if( m_bigFont ) ImGui::PopFont();
+        ImGui::SameLine();
+        if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     }
     SmallColorBox( GetSrcLocColor( m_worker.GetSourceLocation( ev.SrcLoc() ), 0 ) );
     ImGui::SameLine();
     TextDisabledUnformatted( "Location:" );
     ImGui::SameLine();
     ImGui::Text( "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+    ImGui::SameLine();
+    if( ClipboardButton( 3 ) )
+    {
+        char tmp[1024];
+        sprintf( tmp, "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+        ImGui::SetClipboardText( tmp );
+    }
     SmallColorBox( GetThreadColor( tid, 0 ) );
     ImGui::SameLine();
     TextFocused( "Thread:", m_worker.GetThreadName( tid ) );
@@ -7025,7 +7175,7 @@ void View::DrawZoneInfoWindow()
         if( hover )
         {
             m_zoneHighlight = v;
-            if( ImGui::IsMouseClicked( 2 ) )
+            if( IsMouseClicked( 2 ) )
             {
                 ZoomToZone( *v );
             }
@@ -7241,7 +7391,7 @@ void View::DrawZoneInfoChildren( const V& children, int64_t ztime )
                 if( ImGui::IsItemHovered() )
                 {
                     m_zoneHighlight = &cev;
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToZone( cev );
                     }
@@ -7309,7 +7459,7 @@ void View::DrawZoneInfoChildren( const V& children, int64_t ztime )
                         if( ImGui::IsItemHovered() )
                         {
                             m_zoneHighlight = &cev;
-                            if( ImGui::IsMouseClicked( 2 ) )
+                            if( IsMouseClicked( 2 ) )
                             {
                                 ZoomToZone( cev );
                             }
@@ -7372,7 +7522,7 @@ void View::DrawZoneInfoChildren( const V& children, int64_t ztime )
                 if( ImGui::IsItemHovered() )
                 {
                     m_zoneHighlight = &cev;
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToZone( cev );
                     }
@@ -7463,12 +7613,23 @@ void View::DrawGpuInfoWindow()
     if( m_bigFont ) ImGui::PushFont( m_bigFont );
     TextFocused( "Zone name:", m_worker.GetString( srcloc.name ) );
     if( m_bigFont ) ImGui::PopFont();
+    ImGui::SameLine();
+    if( ClipboardButton( 1 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.name ) );
     TextFocused( "Function:", m_worker.GetString( srcloc.function ) );
+    ImGui::SameLine();
+    if( ClipboardButton( 2 ) ) ImGui::SetClipboardText( m_worker.GetString( srcloc.function ) );
     SmallColorBox( GetRawZoneColor( ev ) );
     ImGui::SameLine();
     TextDisabledUnformatted( "Location:" );
     ImGui::SameLine();
     ImGui::Text( "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+    ImGui::SameLine();
+    if( ClipboardButton( 3 ) )
+    {
+        char tmp[1024];
+        sprintf( tmp, "%s:%i", m_worker.GetString( srcloc.file ), srcloc.line );
+        ImGui::SetClipboardText( tmp );
+    }
     SmallColorBox( GetThreadColor( tid, 0 ) );
     ImGui::SameLine();
     TextFocused( "Thread:", m_worker.GetThreadName( tid ) );
@@ -7562,7 +7723,7 @@ void View::DrawGpuInfoWindow()
         if( hover )
         {
             m_gpuHighlight = v;
-            if( ImGui::IsMouseClicked( 2 ) )
+            if( IsMouseClicked( 2 ) )
             {
                 ZoomToZone( *v );
             }
@@ -7672,7 +7833,7 @@ void View::DrawGpuInfoChildren( const V& children, int64_t ztime )
                 if( ImGui::IsItemHovered() )
                 {
                     m_gpuHighlight = &cev;
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToZone( cev );
                     }
@@ -7735,7 +7896,7 @@ void View::DrawGpuInfoChildren( const V& children, int64_t ztime )
                     if( ImGui::IsItemHovered() )
                     {
                         m_gpuHighlight = &cev;
-                        if( ImGui::IsMouseClicked( 2 ) )
+                        if( IsMouseClicked( 2 ) )
                         {
                             ZoomToZone( cev );
                         }
@@ -7792,7 +7953,7 @@ void View::DrawGpuInfoChildren( const V& children, int64_t ztime )
             if( ImGui::IsItemHovered() )
             {
                 m_gpuHighlight = &cev;
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToZone( cev );
                 }
@@ -7873,80 +8034,83 @@ void View::DrawOptions()
                 {
                     ImGui::TextDisabled( "%s threads", RealToString( gpuData[i]->threadData.size() ) );
                 }
-                ImGui::TreePush();
-                auto& drift = GpuDrift( gpuData[i] );
-                ImGui::SetNextItemWidth( 120 );
-                ImGui::PushID( i );
-                ImGui::InputInt( "Drift (ns/s)", &drift );
-                ImGui::PopID();
-                if( timeline.size() > 1 )
+                if( !gpuData[i]->hasCalibration )
                 {
-                    ImGui::SameLine();
-                    if( ImGui::Button( ICON_FA_ROBOT " Auto" ) )
+                    ImGui::TreePush();
+                    auto& drift = GpuDrift( gpuData[i] );
+                    ImGui::SetNextItemWidth( 120 );
+                    ImGui::PushID( i );
+                    ImGui::InputInt( "Drift (ns/s)", &drift );
+                    ImGui::PopID();
+                    if( timeline.size() > 1 )
                     {
-                        size_t lastidx = 0;
-                        if( timeline.is_magic() )
+                        ImGui::SameLine();
+                        if( ImGui::Button( ICON_FA_ROBOT " Auto" ) )
                         {
-                            auto& tl = *((Vector<GpuEvent>*)&timeline);
-                            for( size_t j=tl.size()-1; j > 0; j-- )
+                            size_t lastidx = 0;
+                            if( timeline.is_magic() )
                             {
-                                if( tl[j].GpuEnd() >= 0 )
+                                auto& tl = *((Vector<GpuEvent>*)&timeline);
+                                for( size_t j=tl.size()-1; j > 0; j-- )
                                 {
-                                    lastidx = j;
-                                    break;
+                                    if( tl[j].GpuEnd() >= 0 )
+                                    {
+                                        lastidx = j;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        else
-                        {
-                            for( size_t j=timeline.size()-1; j > 0; j-- )
+                            else
                             {
-                                if( timeline[j]->GpuEnd() >= 0 )
+                                for( size_t j=timeline.size()-1; j > 0; j-- )
                                 {
-                                    lastidx = j;
-                                    break;
+                                    if( timeline[j]->GpuEnd() >= 0 )
+                                    {
+                                        lastidx = j;
+                                        break;
+                                    }
                                 }
                             }
-                        }
 
-                        enum { NumSlopes = 10000 };
-                        std::random_device rd;
-                        std::default_random_engine gen( rd() );
-                        std::uniform_int_distribution<size_t> dist( 0, lastidx - 1 );
-                        float slopes[NumSlopes];
-                        size_t idx = 0;
-                        if( timeline.is_magic() )
-                        {
-                            auto& tl = *((Vector<GpuEvent>*)&timeline);
-                            do
+                            enum { NumSlopes = 10000 };
+                            std::random_device rd;
+                            std::default_random_engine gen( rd() );
+                            std::uniform_int_distribution<size_t> dist( 0, lastidx - 1 );
+                            float slopes[NumSlopes];
+                            size_t idx = 0;
+                            if( timeline.is_magic() )
                             {
-                                const auto p0 = dist( gen );
-                                const auto p1 = dist( gen );
-                                if( p0 != p1 )
+                                auto& tl = *((Vector<GpuEvent>*)&timeline);
+                                do
                                 {
-                                    slopes[idx++] = float( 1.0 - double( tl[p1].GpuStart() - tl[p0].GpuStart() ) / double( tl[p1].CpuStart() - tl[p0].CpuStart() ) );
+                                    const auto p0 = dist( gen );
+                                    const auto p1 = dist( gen );
+                                    if( p0 != p1 )
+                                    {
+                                        slopes[idx++] = float( 1.0 - double( tl[p1].GpuStart() - tl[p0].GpuStart() ) / double( tl[p1].CpuStart() - tl[p0].CpuStart() ) );
+                                    }
                                 }
+                                while( idx < NumSlopes );
                             }
-                            while( idx < NumSlopes );
-                        }
-                        else
-                        {
-                            do
+                            else
                             {
-                                const auto p0 = dist( gen );
-                                const auto p1 = dist( gen );
-                                if( p0 != p1 )
+                                do
                                 {
-                                    slopes[idx++] = float( 1.0 - double( timeline[p1]->GpuStart() - timeline[p0]->GpuStart() ) / double( timeline[p1]->CpuStart() - timeline[p0]->CpuStart() ) );
+                                    const auto p0 = dist( gen );
+                                    const auto p1 = dist( gen );
+                                    if( p0 != p1 )
+                                    {
+                                        slopes[idx++] = float( 1.0 - double( timeline[p1]->GpuStart() - timeline[p0]->GpuStart() ) / double( timeline[p1]->CpuStart() - timeline[p0]->CpuStart() ) );
+                                    }
                                 }
+                                while( idx < NumSlopes );
                             }
-                            while( idx < NumSlopes );
+                            std::sort( slopes, slopes+NumSlopes );
+                            drift = int( 1000000000 * -slopes[NumSlopes/2] );
                         }
-                        std::sort( slopes, slopes+NumSlopes );
-                        drift = int( 1000000000 * -slopes[NumSlopes/2] );
                     }
+                    ImGui::TreePop();
                 }
-                ImGui::TreePop();
             }
             ImGui::TreePop();
         }
@@ -8376,11 +8540,11 @@ void View::DrawOptions()
                     ImGui::BeginTooltip();
                     ImGui::TextUnformatted( "Crashed" );
                     ImGui::EndTooltip();
-                    if( ImGui::IsMouseClicked( 0 ) )
+                    if( IsMouseClicked( 0 ) )
                     {
                         m_showInfo = true;
                     }
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         CenterAtTime( crash.time );
                     }
@@ -8487,11 +8651,12 @@ void View::DrawMessages()
     size_t tsz = 0;
     for( const auto& t : m_threadOrder ) if( !t->messages.empty() ) tsz++;
 
-    m_messageFilter.Draw( ICON_FA_FILTER " Filter messages", 200 );
+    bool filterChanged = m_messageFilter.Draw( ICON_FA_FILTER " Filter messages", 200 );
     ImGui::SameLine();
     if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
     {
         m_messageFilter.Clear();
+        filterChanged = true;
     }
     ImGui::SameLine();
     ImGui::Spacing();
@@ -8509,6 +8674,7 @@ void View::DrawMessages()
         ImGui::Checkbox( ICON_FA_IMAGE " Show frame images", &m_showMessageImages );
     }
 
+    bool threadsChanged = false;
     auto expand = ImGui::TreeNode( ICON_FA_RANDOM " Visible threads:" );
     ImGui::SameLine();
     ImGui::TextDisabled( "(%zu)", tsz );
@@ -8523,6 +8689,7 @@ void View::DrawMessages()
             {
                 VisibleMsgThread( t->id ) = true;
             }
+            threadsChanged = true;
         }
         ImGui::SameLine();
         if( ImGui::SmallButton( "Unselect all" ) )
@@ -8531,6 +8698,7 @@ void View::DrawMessages()
             {
                 VisibleMsgThread( t->id ) = false;
             }
+            threadsChanged = true;
         }
 
         int idx = 0;
@@ -8541,7 +8709,10 @@ void View::DrawMessages()
             const auto threadColor = GetThreadColor( t->id, 0 );
             SmallColorBox( threadColor );
             ImGui::SameLine();
-            SmallCheckbox( m_worker.GetThreadName( t->id ), &VisibleMsgThread( t->id ) );
+            if( SmallCheckbox( m_worker.GetThreadName( t->id ), &VisibleMsgThread( t->id ) ) )
+            {
+                threadsChanged = true;
+            }
             ImGui::PopID();
             ImGui::SameLine();
             ImGui::TextDisabled( "(%s)", RealToString( t->messages.size() ) );
@@ -8552,6 +8723,78 @@ void View::DrawMessages()
             }
         }
         ImGui::TreePop();
+    }
+
+    const bool msgsChanged = msgs.size() != m_prevMessages;
+    if( filterChanged || threadsChanged )
+    {
+        m_msgList.reserve( msgs.size() );
+        m_msgList.clear();
+        if( m_messageFilter.IsActive() )
+        {
+            for( size_t i=0; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    const auto text = m_worker.GetString( msgs[i]->ref );
+                    if( m_messageFilter.PassFilter( text ) )
+                    {
+                        m_msgList.push_back_no_space_check( uint32_t( i ) );
+                    }
+                }
+            }
+        }
+        else
+        {
+            for( size_t i=0; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    m_msgList.push_back_no_space_check( uint32_t( i ) );
+                }
+            }
+        }
+        m_visibleMessages = m_msgList.size();
+        if( msgsChanged ) m_prevMessages = msgs.size();
+    }
+    else if( msgsChanged )
+    {
+        assert( m_prevMessages < msgs.size() );
+        m_msgList.reserve( msgs.size() );
+        if( m_messageFilter.IsActive() )
+        {
+            for( size_t i=m_prevMessages; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    const auto text = m_worker.GetString( msgs[i]->ref );
+                    if( m_messageFilter.PassFilter( text ) )
+                    {
+                        m_msgList.push_back_no_space_check( uint32_t( i ) );
+                    }
+                }
+            }
+        }
+        else
+        {
+            for( size_t i=m_prevMessages; i<msgs.size(); i++ )
+            {
+                const auto& v = msgs[i];
+                const auto tid = m_worker.DecompressThread( v->thread );
+                if( VisibleMsgThread( tid ) )
+                {
+                    m_msgList.push_back_no_space_check( uint32_t( i ) );
+                }
+            }
+        }
+        m_visibleMessages = m_msgList.size();
+        m_prevMessages = msgs.size();
     }
 
     bool hasCallstack = m_worker.GetCallstackFrameCount() != 0;
@@ -8587,85 +8830,25 @@ void View::DrawMessages()
     }
     ImGui::Separator();
 
-    int msgcnt = 0;
-    const auto filterActive = m_messageFilter.IsActive();
     int idx = 0;
-    for( const auto& v : msgs )
+    if( m_msgToFocus )
     {
-        const auto tid = m_worker.DecompressThread( v->thread );
-        if( VisibleMsgThread( tid ) )
+        for( const auto& msgIdx : m_msgList )
         {
-            const auto text = m_worker.GetString( v->ref );
-            if( !filterActive || m_messageFilter.PassFilter( text ) )
+            DrawMessageLine( *msgs[msgIdx], hasCallstack, idx );
+        }
+    }
+    else
+    {
+        ImGuiListClipper clipper( m_msgList.size() );
+        while( clipper.Step() )
+        {
+            for( auto i=clipper.DisplayStart; i<clipper.DisplayEnd; i++ )
             {
-                ImGui::PushID( v );
-                if( ImGui::Selectable( TimeToStringExact( v->time ), m_msgHighlight == v, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap ) )
-                {
-                    CenterAtTime( v->time );
-                }
-                if( ImGui::IsItemHovered() )
-                {
-                    m_msgHighlight = v;
-
-                    if( m_showMessageImages )
-                    {
-                        const auto frameIdx = m_worker.GetFrameRange( *m_frames, v->time, v->time ).first;
-                        auto fi = m_worker.GetFrameImage( *m_frames, frameIdx );
-                        if( fi )
-                        {
-                            ImGui::BeginTooltip();
-                            if( fi != m_frameTexturePtr )
-                            {
-                                if( !m_frameTexture ) m_frameTexture = MakeTexture();
-                                UpdateTexture( m_frameTexture, m_worker.UnpackFrameImage( *fi ), fi->w, fi->h );
-                                m_frameTexturePtr = fi;
-                            }
-                            if( fi->flip )
-                            {
-                                ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ), ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
-                            }
-                            else
-                            {
-                                ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ) );
-                            }
-                            ImGui::EndTooltip();
-                        }
-                    }
-                }
-                if( m_msgToFocus == v )
-                {
-                    ImGui::SetScrollHereY();
-                    m_msgToFocus.Decay( nullptr );
-                    m_messagesScrollBottom = false;
-                }
-                ImGui::PopID();
-                ImGui::NextColumn();
-                SmallColorBox( GetThreadColor( tid, 0 ) );
-                ImGui::SameLine();
-                ImGui::TextUnformatted( m_worker.GetThreadName( tid ) );
-                ImGui::SameLine();
-                ImGui::TextDisabled( "(%s)", RealToString( tid ) );
-                ImGui::NextColumn();
-                ImGui::PushStyleColor( ImGuiCol_Text, v->color );
-                ImGui::TextWrapped( "%s", text );
-                ImGui::PopStyleColor();
-                ImGui::NextColumn();
-                if( hasCallstack )
-                {
-                    const auto cs = v->callstack.Val();
-                    if( cs != 0 )
-                    {
-                        SmallCallstackButton( ICON_FA_ALIGN_JUSTIFY, cs, idx );
-                        ImGui::SameLine();
-                        DrawCallstackCalls( cs, 4 );
-                    }
-                    ImGui::NextColumn();
-                }
-                msgcnt++;
+                DrawMessageLine( *msgs[m_msgList[i]], hasCallstack, idx );
             }
         }
     }
-    m_visibleMessages = msgcnt;
 
     if( m_worker.IsConnected() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() )
     {
@@ -8675,6 +8858,84 @@ void View::DrawMessages()
     ImGui::EndColumns();
     ImGui::EndChild();
     ImGui::End();
+}
+
+void View::DrawMessageLine( const MessageData& msg, bool hasCallstack, int& idx )
+{
+    const auto text = m_worker.GetString( msg.ref );
+    const auto tid = m_worker.DecompressThread( msg.thread );
+    ImGui::PushID( &msg );
+    if( ImGui::Selectable( TimeToStringExact( msg.time ), m_msgHighlight == &msg, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap ) )
+    {
+        CenterAtTime( msg.time );
+    }
+    if( ImGui::IsItemHovered() )
+    {
+        m_msgHighlight = &msg;
+
+        if( m_showMessageImages )
+        {
+            const auto frameIdx = m_worker.GetFrameRange( *m_frames, msg.time, msg.time ).first;
+            auto fi = m_worker.GetFrameImage( *m_frames, frameIdx );
+            if( fi )
+            {
+                ImGui::BeginTooltip();
+                if( fi != m_frameTexturePtr )
+                {
+                    if( !m_frameTexture ) m_frameTexture = MakeTexture();
+                    UpdateTexture( m_frameTexture, m_worker.UnpackFrameImage( *fi ), fi->w, fi->h );
+                    m_frameTexturePtr = fi;
+                }
+                if( fi->flip )
+                {
+                    ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ), ImVec2( 0, 1 ), ImVec2( 1, 0 ) );
+                }
+                else
+                {
+                    ImGui::Image( m_frameTexture, ImVec2( fi->w, fi->h ) );
+                }
+                ImGui::EndTooltip();
+            }
+        }
+    }
+    if( m_msgToFocus == &msg )
+    {
+        ImGui::SetScrollHereY();
+        m_msgToFocus.Decay( nullptr );
+        m_messagesScrollBottom = false;
+    }
+    ImGui::PopID();
+    ImGui::NextColumn();
+    SmallColorBox( GetThreadColor( tid, 0 ) );
+    ImGui::SameLine();
+    ImGui::TextUnformatted( m_worker.GetThreadName( tid ) );
+    ImGui::SameLine();
+    ImGui::TextDisabled( "(%s)", RealToString( tid ) );
+    ImGui::NextColumn();
+    ImGui::PushStyleColor( ImGuiCol_Text, msg.color );
+    const auto cw = ImGui::GetContentRegionAvail().x;
+    const auto tw = ImGui::CalcTextSize( text ).x;
+    ImGui::TextUnformatted( text );
+    if( tw > cw && ImGui::IsItemHovered() )
+    {
+        ImGui::SetNextWindowSize( ImVec2( 1000, 0 ) );
+        ImGui::BeginTooltip();
+        ImGui::TextWrapped( "%s", text );
+        ImGui::EndTooltip();
+    }
+    ImGui::PopStyleColor();
+    ImGui::NextColumn();
+    if( hasCallstack )
+    {
+        const auto cs = msg.callstack.Val();
+        if( cs != 0 )
+        {
+            SmallCallstackButton( ICON_FA_ALIGN_JUSTIFY, cs, idx );
+            ImGui::SameLine();
+            DrawCallstackCalls( cs, 4 );
+        }
+        ImGui::NextColumn();
+    }
 }
 
 uint64_t View::GetSelectionTarget( const Worker::ZoneThreadData& ev, FindZone::GroupBy groupBy ) const
@@ -8689,6 +8950,13 @@ uint64_t View::GetSelectionTarget( const Worker::ZoneThreadData& ev, FindZone::G
         if( !m_worker.HasZoneExtra( zone ) ) return std::numeric_limits<uint64_t>::max();
         const auto& extra = m_worker.GetZoneExtra( zone );
         return extra.text.Active() ? extra.text.Idx() : std::numeric_limits<uint64_t>::max();
+    }
+    case FindZone::GroupBy::ZoneName:
+    {
+        const auto& zone = *ev.Zone();
+        if( !m_worker.HasZoneExtra( zone ) ) return std::numeric_limits<uint64_t>::max();
+        const auto& extra = m_worker.GetZoneExtra( zone );
+        return extra.name.Active() ? extra.name.Idx() : std::numeric_limits<uint64_t>::max();
     }
     case FindZone::GroupBy::Callstack:
         return m_worker.GetZoneExtra( *ev.Zone() ).callstack.Val();
@@ -8762,31 +9030,26 @@ void View::DrawFindZone()
     ImGui::SameLine();
     ImGui::Checkbox( "Ignore case", &m_findZone.ignoreCase );
     ImGui::SameLine();
-    if( ImGui::Checkbox( "Limit range", &m_findZone.limitRange ) )
+    if( ImGui::Checkbox( "Limit range", &m_findZone.range.active ) )
     {
-        m_findZone.ResetMatch();
-        if( m_findZone.limitRange )
+        if( m_findZone.range.active && m_findZone.range.min == 0 && m_findZone.range.max == 0 )
         {
-            m_findZone.rangeMin = m_vd.zvStart;
-            m_findZone.rangeMax = m_vd.zvEnd;
+            m_findZone.range.min = m_vd.zvStart;
+            m_findZone.range.max = m_vd.zvEnd;
         }
     }
-    if( m_findZone.limitRange )
+    if( m_findZone.range.active )
     {
-        ImGui::TextUnformatted( ICON_FA_LOCK );
         ImGui::SameLine();
-        TextFocused( "Zone time range:", TimeToStringExact( m_findZone.rangeMin ) );
+        TextColoredUnformatted( 0xFF00FFFF, ICON_FA_EXCLAMATION_TRIANGLE );
         ImGui::SameLine();
-        TextFocused( "-", TimeToStringExact( m_findZone.rangeMax ) );
-        ImGui::SameLine();
-        ImGui::TextDisabled( "(%s)", TimeToString( m_findZone.rangeMax - m_findZone.rangeMin ) );
-        ImGui::SameLine();
-        if( ImGui::SmallButton( "Limit to view" ) )
-        {
-            m_findZone.ResetMatch();
-            m_findZone.rangeMin = m_vd.zvStart;
-            m_findZone.rangeMax = m_vd.zvEnd;
-        }
+        ToggleButton( ICON_FA_RULER " Limits", m_showRanges );
+    }
+
+    if( m_findZone.rangeSlim != m_findZone.range )
+    {
+        m_findZone.ResetMatch();
+        m_findZone.rangeSlim = m_findZone.range;
     }
 
     if( findClicked )
@@ -8797,8 +9060,8 @@ void View::DrawFindZone()
 
     if( !m_findZone.match.empty() )
     {
-        const auto rangeMin = m_findZone.rangeMin;
-        const auto rangeMax = m_findZone.rangeMax;
+        const auto rangeMin = m_findZone.range.min;
+        const auto rangeMax = m_findZone.range.max;
 
         ImGui::Separator();
         ImGui::BeginChild( "##findzone" );
@@ -8877,7 +9140,7 @@ void View::DrawFindZone()
                 size_t i;
                 if( m_findZone.runningTime )
                 {
-                    if( m_findZone.limitRange )
+                    if( m_findZone.range.active )
                     {
                         for( i=m_findZone.sortedNum; i<zsz; i++ )
                         {
@@ -8916,7 +9179,7 @@ void View::DrawFindZone()
                 {
                     tmin = zoneData.selfMin;
                     tmax = zoneData.selfMax;
-                    if( m_findZone.limitRange )
+                    if( m_findZone.range.active )
                     {
                         for( i=m_findZone.sortedNum; i<zsz; i++ )
                         {
@@ -8945,7 +9208,7 @@ void View::DrawFindZone()
                 {
                     tmin = zoneData.min;
                     tmax = zoneData.max;
-                    if( m_findZone.limitRange )
+                    if( m_findZone.range.active )
                     {
                         for( i=m_findZone.sortedNum; i<zsz; i++ )
                         {
@@ -9003,7 +9266,7 @@ void View::DrawFindZone()
                     int64_t total = m_findZone.selTotal;
                     if( m_findZone.runningTime )
                     {
-                        if( m_findZone.limitRange )
+                        if( m_findZone.range.active )
                         {
                             for( size_t i=m_findZone.selSortNum; i<m_findZone.sortedNum; i++ )
                             {
@@ -9041,7 +9304,7 @@ void View::DrawFindZone()
                     }
                     else if( m_findZone.selfTime )
                     {
-                        if( m_findZone.limitRange )
+                        if( m_findZone.range.active )
                         {
                             for( size_t i=m_findZone.selSortNum; i<m_findZone.sortedNum; i++ )
                             {
@@ -9073,7 +9336,7 @@ void View::DrawFindZone()
                     }
                     else
                     {
-                        if( m_findZone.limitRange )
+                        if( m_findZone.range.active )
                         {
                             for( size_t i=m_findZone.selSortNum; i<m_findZone.sortedNum; i++ )
                             {
@@ -9178,7 +9441,7 @@ void View::DrawFindZone()
                         auto sortedEnd = sorted.end();
                         while( sortedBegin != sortedEnd && *sortedBegin == 0 ) ++sortedBegin;
 
-                        if( m_findZone.minBinVal > 1 || m_findZone.limitRange )
+                        if( m_findZone.minBinVal > 1 || m_findZone.range.active )
                         {
                             if( m_findZone.logTime )
                             {
@@ -9412,7 +9675,7 @@ void View::DrawFindZone()
                             }
                             TextFocused( "Mode:", TimeToString( ( t0 + t1 ) / 2 ) );
                         }
-                        if( !m_findZone.limitRange && m_findZone.sorted.size() > 1 )
+                        if( !m_findZone.range.active && m_findZone.sorted.size() > 1 )
                         {
                             const auto sz = m_findZone.sorted.size();
                             const auto avg = m_findZone.average;
@@ -9739,12 +10002,12 @@ void View::DrawFindZone()
                             TextFocused( "Time spent in the right bins:", TimeToString( tAfter ) );
                             ImGui::EndTooltip();
 
-                            if( ImGui::IsMouseClicked( 1 ) )
+                            if( IsMouseClicked( 1 ) )
                             {
                                 m_findZone.highlight.active = false;
                                 m_findZone.ResetGroups();
                             }
-                            else if( ImGui::IsMouseClicked( 0 ) )
+                            else if( IsMouseClicked( 0 ) )
                             {
                                 m_findZone.highlight.active = true;
                                 m_findZone.highlight.start = t0;
@@ -9752,7 +10015,7 @@ void View::DrawFindZone()
                                 m_findZone.hlOrig_t0 = t0;
                                 m_findZone.hlOrig_t1 = t1;
                             }
-                            else if( ImGui::IsMouseDragging( 0, 0 ) )
+                            else if( IsMouseDragging( 0 ) )
                             {
                                 if( t0 < m_findZone.hlOrig_t0 )
                                 {
@@ -9835,6 +10098,8 @@ void View::DrawFindZone()
         ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "User text", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::UserText );
         ImGui::SameLine();
+        groupChanged |= ImGui::RadioButton( "Zone name", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::ZoneName );
+        ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "Call stacks", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::Callstack );
         ImGui::SameLine();
         groupChanged |= ImGui::RadioButton( "Parent", (int*)( &m_findZone.groupBy ), (int)FindZone::GroupBy::Parent );
@@ -9864,7 +10129,7 @@ void View::DrawFindZone()
         const auto hmax = std::max( m_findZone.highlight.start, m_findZone.highlight.end );
         const auto groupBy = m_findZone.groupBy;
         const auto highlightActive = m_findZone.highlight.active;
-        const auto limitRange = m_findZone.limitRange;
+        const auto limitRange = m_findZone.range.active;
         FindZone::Group* group = nullptr;
         uint64_t lastGid = std::numeric_limits<uint64_t>::max() - 1;
         auto zptr = zones.data() + m_findZone.processed;
@@ -9922,6 +10187,20 @@ void View::DrawFindZone()
                 {
                     const auto& extra = m_worker.GetZoneExtra( zone );
                     gid = extra.text.Active() ? extra.text.Idx() : std::numeric_limits<uint64_t>::max();
+                }
+                break;
+            }
+            case FindZone::GroupBy::ZoneName:
+            {
+                const auto& zone = *ev.Zone();
+                if( !m_worker.HasZoneExtra( zone ) )
+                {
+                    gid = std::numeric_limits<uint64_t>::max();
+                }
+                else
+                {
+                    const auto& extra = m_worker.GetZoneExtra( zone );
+                    gid = extra.name.Active() ? extra.name.Idx() : std::numeric_limits<uint64_t>::max();
                 }
                 break;
             }
@@ -10110,6 +10389,17 @@ void View::DrawFindZone()
                 case FindZone::GroupBy::UserText:
                     hdrString = v->first == std::numeric_limits<uint64_t>::max() ? "No user text" : m_worker.GetString( StringIdx( v->first ) );
                     break;
+                case FindZone::GroupBy::ZoneName:
+                    if( v->first == std::numeric_limits<uint64_t>::max() )
+                    {
+                        auto& srcloc = m_worker.GetSourceLocation( m_findZone.match[m_findZone.selMatch] );
+                        hdrString = m_worker.GetString( srcloc.name.active ? srcloc.name : srcloc.function );
+                    }
+                    else
+                    {
+                        hdrString = m_worker.GetString( StringIdx( v->first ) );
+                    }
+                    break;
                 case FindZone::GroupBy::Callstack:
                     if( v->first == 0 )
                     {
@@ -10161,7 +10451,7 @@ void View::DrawFindZone()
             }
         }
         ImGui::EndChild();
-        if( ImGui::IsItemHovered() && ImGui::IsMouseClicked( 1 ) )
+        if( ImGui::IsItemHovered() && IsMouseClicked( 1 ) )
         {
             m_findZone.selGroup = m_findZone.Unselected;
             m_findZone.ResetSelection();
@@ -10268,7 +10558,7 @@ void View::DrawZoneList( const Vector<short_ptr<ZoneEvent>>& zones )
             if( ImGui::IsItemHovered() )
             {
                 m_zoneHighlight = ev;
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToZone( *ev );
                 }
@@ -11316,6 +11606,10 @@ void View::DrawStatistics()
             ImGui::SameLine();
             ImGui::Spacing();
             ImGui::SameLine();
+            ImGui::SeparatorEx( ImGuiSeparatorFlags_Vertical );
+            ImGui::SameLine();
+            ImGui::Spacing();
+            ImGui::SameLine();
         }
     }
 
@@ -11329,13 +11623,6 @@ void View::DrawStatistics()
             DrawWaitingDots( s_time );
             ImGui::End();
             return;
-        }
-
-        m_statisticsFilter.Draw( ICON_FA_FILTER, 200 );
-        ImGui::SameLine();
-        if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
-        {
-            m_statisticsFilter.Clear();
         }
 
         const auto filterActive = m_statisticsFilter.IsActive();
@@ -11394,9 +11681,6 @@ void View::DrawStatistics()
             break;
         }
 
-        ImGui::SameLine();
-        ImGui::Spacing();
-        ImGui::SameLine();
         TextFocused( "Total zone count:", RealToString( slzcnt ) );
         ImGui::SameLine();
         ImGui::Spacing();
@@ -11406,6 +11690,16 @@ void View::DrawStatistics()
         ImGui::Spacing();
         ImGui::SameLine();
         ImGui::Checkbox( ICON_FA_CLOCK " Self time", &m_statSelf );
+
+        ImGui::Separator();
+        TextDisabledUnformatted( "Filter results" );
+        ImGui::SameLine();
+        m_statisticsFilter.Draw( ICON_FA_FILTER, 200 );
+        ImGui::SameLine();
+        if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
+        {
+            m_statisticsFilter.Clear();
+        }
 
         ImGui::Separator();
 
@@ -11492,7 +11786,6 @@ void View::DrawStatistics()
                 ImGui::NextColumn();
                 ImGui::TextUnformatted( TimeToString( ( m_statSelf ? v->second.selfTotal : v->second.total ) / v->second.zones.size() ) );
                 ImGui::NextColumn();
-
                 ImGui::PopID();
             }
             ImGui::EndColumns();
@@ -11501,15 +11794,6 @@ void View::DrawStatistics()
     }
     else
     {
-        m_statisticsFilter.Draw( ICON_FA_FILTER, 200 );
-        ImGui::SameLine();
-        if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
-        {
-            m_statisticsFilter.Clear();
-        }
-        ImGui::SameLine();
-        ImGui::Spacing();
-        ImGui::SameLine();
         ImGui::Checkbox( ICON_FA_STOPWATCH " Show time", &m_statSampleTime );
         ImGui::SameLine();
         ImGui::Checkbox( ICON_FA_CLOCK " Self time", &m_statSelf );
@@ -11527,6 +11811,17 @@ void View::DrawStatistics()
         const char* locationTable = "Entry\0Sample\0Smart\0";
         ImGui::SetNextItemWidth( ImGui::CalcTextSize( "Sample" ).x + ImGui::GetTextLineHeight() * 2 );
         ImGui::Combo( "##location", &m_statSampleLocation, locationTable );
+
+        ImGui::Separator();
+        TextDisabledUnformatted( "Filter results" );
+        ImGui::SameLine();
+        m_statisticsFilter.Draw( ICON_FA_FILTER, 200 );
+        ImGui::SameLine();
+        if( ImGui::Button( ICON_FA_BACKSPACE " Clear" ) )
+        {
+            m_statisticsFilter.Clear();
+        }
+
         ImGui::Separator();
 
         const auto& symMap = m_worker.GetSymbolMap();
@@ -12431,7 +12726,7 @@ void View::DrawMemoryAllocWindow()
         if( hover )
         {
             m_zoneHighlight = zoneAlloc;
-            if( ImGui::IsMouseClicked( 2 ) )
+            if( IsMouseClicked( 2 ) )
             {
                 ZoomToZone( *zoneAlloc );
             }
@@ -12456,7 +12751,7 @@ void View::DrawMemoryAllocWindow()
             if( hover )
             {
                 m_zoneHighlight = zoneFree;
-                if( ImGui::IsMouseClicked( 2 ) )
+                if( IsMouseClicked( 2 ) )
                 {
                     ZoomToZone( *zoneFree );
                 }
@@ -12630,19 +12925,46 @@ void View::DrawInfo()
             ImGui::TextUnformatted( "Coarse CPU core context switch data" );
             ImGui::EndTooltip();
         }
-        TextFocused( "Source file cache:", RealToString( m_worker.GetSourceFileCacheCount() ) );
-        if( ImGui::IsItemHovered() )
+        if( m_worker.GetSourceFileCacheCount() == 0 )
         {
-            ImGui::BeginTooltip();
-            ImGui::TextUnformatted( MemSizeToString( m_worker.GetSourceFileCacheSize() ) );
-            ImGui::EndTooltip();
+            TextFocused( "Source file cache:", "0" );
+        }
+        else
+        {
+            ImGui::PushStyleColor( ImGuiCol_Text, GImGui->Style.Colors[ImGuiCol_TextDisabled] );
+            const bool expand = ImGui::TreeNode( "Source file cache:" );
+            ImGui::PopStyleColor();
+            ImGui::SameLine();
+            ImGui::TextUnformatted( RealToString( m_worker.GetSourceFileCacheCount() ) );
+            if( ImGui::IsItemHovered() )
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted( MemSizeToString( m_worker.GetSourceFileCacheSize() ) );
+                ImGui::EndTooltip();
+            }
+            if( expand )
+            {
+                auto& cache = m_worker.GetSourceFileCache();
+                std::vector<decltype(cache.begin())> vec;
+                vec.reserve( cache.size() );
+                for( auto it = cache.begin(); it != cache.end(); ++it ) vec.emplace_back( it );
+                pdqsort_branchless( vec.begin(), vec.end(), []( const auto& lhs, const auto& rhs ) { return strcmp( lhs->first, rhs->first ) < 0; } );
+                for( auto& v : vec )
+                {
+                    ImGui::BulletText( "%s", v->first );
+                    if( ImGui::IsItemClicked() ) ViewSource( v->first, 0 );
+                    ImGui::SameLine();
+                    ImGui::TextDisabled( "(%s)", MemSizeToString( v->second.len ) );
+                }
+                ImGui::TreePop();
+            }
         }
         ImGui::TreePop();
     }
 
     if( ImGui::TreeNode( "Frame statistics" ) )
     {
-        const auto fsz = m_worker.GetFullFrameCount( *m_frames );
+        auto fsz = m_worker.GetFullFrameCount( *m_frames );
         if( fsz != 0 )
         {
             TextFocused( "Frame set:", m_frames->name == 0 ? "Frames" : m_worker.GetString( m_frames->name ) );
@@ -12659,6 +12981,7 @@ void View::DrawInfo()
                     if( ImGui::Selectable( fd->name == 0 ? "Frames" : m_worker.GetString( fd->name ), isSelected ) )
                     {
                         m_frames = fd;
+                        fsz = m_worker.GetFullFrameCount( *m_frames );
                     }
                     if( isSelected )
                     {
@@ -12672,6 +12995,11 @@ void View::DrawInfo()
             ImGui::PopStyleVar();
             ImGui::SameLine();
             SmallCheckbox( "Limit to view", &m_frameSortData.limitToView );
+            if( m_frameSortData.limitToView )
+            {
+                ImGui::SameLine();
+                TextColoredUnformatted( 0xFF00FFFF, ICON_FA_EXCLAMATION_TRIANGLE );
+            }
 
             const auto frameRange = m_worker.GetFrameRange( *m_frames, m_vd.zvStart, m_vd.zvEnd );
             if( m_frameSortData.frameSet != m_frames || ( m_frameSortData.limitToView && m_frameSortData.limitRange != frameRange ) || ( !m_frameSortData.limitToView && m_frameSortData.limitRange.first != -1 ) )
@@ -13962,6 +14290,12 @@ void View::DrawAnnotationList()
         {
             remove = idx;
         }
+        if( !ctrl && ImGui::IsItemHovered() )
+        {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted( "Press ctrl key to enable removal" );
+            ImGui::EndTooltip();
+        }
         ImGui::SameLine();
         ImGui::ColorButton( "c", ImGui::ColorConvertU32ToFloat4( ann->color ), ImGuiColorEditFlags_NoTooltip );
         ImGui::SameLine();
@@ -14278,6 +14612,56 @@ void View::DrawSampleParents()
     }
 }
 
+void View::DrawRanges()
+{
+    ImGui::SetNextWindowSize( ImVec2( 400, 100 ), ImGuiCond_FirstUseEver );
+    ImGui::Begin( "Time range limits", &m_showRanges );
+    SmallColorBox( 0x4488DDDD );
+    ImGui::SameLine();
+    if( SmallCheckbox( "Find zone", &m_findZone.range.active ) )
+    {
+        if( m_findZone.range.active && m_findZone.range.min == 0 && m_findZone.range.max == 0 )
+        {
+            m_findZone.range.min = m_vd.zvStart;
+            m_findZone.range.max = m_vd.zvEnd;
+        }
+    }
+    if( m_findZone.range.active )
+    {
+        ImGui::SameLine();
+        if( ImGui::SmallButton( "Limit to view" ) )
+        {
+            m_findZone.range.min = m_vd.zvStart;
+            m_findZone.range.max = m_vd.zvEnd;
+        }
+        TextFocused( "Time range:", TimeToStringExact( m_findZone.range.min ) );
+        ImGui::SameLine();
+        TextFocused( "-", TimeToStringExact( m_findZone.range.max ) );
+        ImGui::SameLine();
+        ImGui::TextDisabled( "(%s)", TimeToString( m_findZone.range.max - m_findZone.range.min ) );
+        if( ImGui::SmallButton( ICON_FA_MICROSCOPE " Focus" ) ) ZoomToRange( m_findZone.range.min, m_findZone.range.max );
+        ImGui::SameLine();
+        if( SmallButtonDisablable( ICON_FA_STICKY_NOTE " Set from annotation", m_annotations.empty() ) ) ImGui::OpenPopup( "RangeFindZoneCopyFrom" );
+        if( ImGui::BeginPopup( "RangeFindZoneCopyFrom" ) )
+        {
+            for( auto& v : m_annotations )
+            {
+                SmallColorBox( v->color );
+                ImGui::SameLine();
+                if( ImGui::Selectable( v->text.c_str() ) )
+                {
+                    m_findZone.range.min = v->start;
+                    m_findZone.range.max = v->end;
+                }
+                ImGui::SameLine();
+                ImGui::TextDisabled( "%s - %s (%s)", TimeToStringExact( v->start ), TimeToStringExact( v->end ), TimeToString( v->end - v->start ) );
+            }
+            ImGui::EndPopup();
+        }
+    }
+    ImGui::End();
+}
+
 void View::ListMemData( std::vector<const MemEvent*>& vec, std::function<void(const MemEvent*)> DrawAddress, const char* id, int64_t startTime )
 {
     if( startTime == -1 ) startTime = 0;
@@ -14449,7 +14833,7 @@ void View::ListMemData( std::vector<const MemEvent*>& vec, std::function<void(co
                 if( hover )
                 {
                     m_zoneHighlight = zone;
-                    if( ImGui::IsMouseClicked( 2 ) )
+                    if( IsMouseClicked( 2 ) )
                     {
                         ZoomToZone( *zone );
                     }
@@ -14493,7 +14877,7 @@ void View::ListMemData( std::vector<const MemEvent*>& vec, std::function<void(co
                     if( hover )
                     {
                         m_zoneHighlight = zoneFree;
-                        if( ImGui::IsMouseClicked( 2 ) )
+                        if( IsMouseClicked( 2 ) )
                         {
                             ZoomToZone( *zoneFree );
                         }

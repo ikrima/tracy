@@ -36,6 +36,7 @@
 #include "../../server/TracyBadVersion.hpp"
 #include "../../server/TracyFileRead.hpp"
 #include "../../server/TracyImGui.hpp"
+#include "../../server/TracyMouse.hpp"
 #include "../../server/TracyPrint.hpp"
 #include "../../server/TracyStorage.hpp"
 #include "../../server/TracyView.hpp"
@@ -352,6 +353,9 @@ int main( int argc, char** argv )
         }
     }
 
+    if( loadThread.joinable() ) loadThread.join();
+    view.reset();
+
     {
         FILE* f = fopen( winPosFile.c_str(), "wb" );
         if( f )
@@ -434,6 +438,7 @@ static void DrawContents()
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    tracy::MouseFrame();
 
     if( !view )
     {

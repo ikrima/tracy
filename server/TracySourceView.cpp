@@ -961,6 +961,8 @@ void SourceView::RenderSymbolView( const Worker& worker, View& view )
     {
         TextFocused( ICON_FA_PUZZLE_PIECE " Symbol:", worker.GetString( sym->name ) );
     }
+    ImGui::SameLine();
+    TextDisabledUnformatted( worker.GetString( sym->imageName ) );
 
     auto inlineList = worker.GetInlineSymbolList( m_baseAddr, m_codeLen );
     if( inlineList )
@@ -1058,6 +1060,22 @@ void SourceView::RenderSymbolView( const Worker& worker, View& view )
                 if( ImGui::Selectable( symName, v.first == m_symAddr, ImGuiSelectableFlags_SpanAllColumns ) )
                 {
                     m_symAddr = v.first;
+                    const auto sym = worker.GetSymbolData( v.first );
+                    const char* file;
+                    uint32_t line;
+                    if( sym->isInline )
+                    {
+                        file = worker.GetString( sym->callFile );
+                        line = sym->callLine;
+                    }
+                    else
+                    {
+                        file = worker.GetString( sym->file );
+                        line = sym->line;
+                    }
+                    ParseSource( file, worker, view );
+                    m_targetLine = line;
+                    SelectLine( line, &worker, true );
                 }
                 ImGui::PopID();
                 ImGui::NextColumn();
@@ -3114,10 +3132,6 @@ static unordered_flat_set<const char*, charutil::Hasher, charutil::Comparator> G
 }
 }
 
-static const auto s_keywords = GetKeywords();
-static const auto s_types = GetTypes();
-static const auto s_special = GetSpecial();
-
 static bool TokenizeNumber( const char*& begin, const char* end )
 {
     const bool startNum = *begin >= '0' && *begin <= '9';
@@ -3178,6 +3192,10 @@ static bool TokenizeNumber( const char*& begin, const char* end )
 
 SourceView::TokenColor SourceView::IdentifyToken( const char*& begin, const char* end )
 {
+    static const auto s_keywords = GetKeywords();
+    static const auto s_types = GetTypes();
+    static const auto s_special = GetSpecial();
+
     if( *begin == '"' )
     {
         begin++;
