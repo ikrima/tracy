@@ -130,6 +130,7 @@ public:
 
     void SpawnWorkerThreads();
 
+    tracy_force_inline double GetTimerMul() const { return m_timerMul; }
     static tracy_force_inline int64_t GetTime()
     {
 #ifdef TRACY_HW_TIMER
