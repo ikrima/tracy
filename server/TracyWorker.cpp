@@ -256,14 +256,16 @@ Worker::Worker( const char* addr, int port )
     m_data.localThreadCompress.InitZero();
     m_data.callstackPayload.push_back( nullptr );
     m_data.zoneExtra.push_back( ZoneExtra {} );
+    m_data.symbolLocInline.push_back( std::numeric_limits<uint64_t>::max() );
 
-    memset( m_gpuCtxMap, 0, sizeof( m_gpuCtxMap ) );
+    memset( (char*)m_gpuCtxMap, 0, sizeof( m_gpuCtxMap ) );
 
 #ifndef TRACY_NO_STATISTICS
     m_data.sourceLocationZonesReady = true;
     m_data.callstackSamplesReady = true;
     m_data.ghostZonesReady = true;
     m_data.ctxUsageReady = true;
+    m_data.symbolSamplesReady = true;
 #endif
 
     m_thread = std::thread( [this] { SetThreadName( "Tracy Worker" ); Exec(); } );
@@ -286,6 +288,7 @@ Worker::Worker( const std::string& program, const std::vector<ImportEventTimelin
     m_data.localThreadCompress.InitZero();
     m_data.callstackPayload.push_back( nullptr );
     m_data.zoneExtra.push_back( ZoneExtra {} );
+    m_data.symbolLocInline.push_back( std::numeric_limits<uint64_t>::max() );
 
     m_data.lastTime = 0;
     if( !timeline.empty() )
@@ -832,7 +835,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
     s_loadProgress.subProgress.store( 0, std::memory_order_relaxed );
     f.Read( sz );
     m_data.zoneChildren.reserve_exact( sz, m_slab );
-    memset( m_data.zoneChildren.data(), 0, sizeof( Vector<short_ptr<ZoneEvent>> ) * sz );
+    memset( (char*)m_data.zoneChildren.data(), 0, sizeof( Vector<short_ptr<ZoneEvent>> ) * sz );
     int32_t childIdx = 0;
     f.Read( sz );
     m_data.threads.reserve_exact( sz, m_slab );
@@ -916,7 +919,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
     s_loadProgress.subProgress.store( 0, std::memory_order_relaxed );
     f.Read( sz );
     m_data.gpuChildren.reserve_exact( sz, m_slab );
-    memset( m_data.gpuChildren.data(), 0, sizeof( Vector<short_ptr<GpuEvent>> ) * sz );
+    memset( (char*)m_data.gpuChildren.data(), 0, sizeof( Vector<short_ptr<GpuEvent>> ) * sz );
     childIdx = 0;
     f.Read( sz );
     m_data.gpuData.reserve_exact( sz, m_slab );
@@ -1380,7 +1383,14 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
             f.Read( sz );
             m_data.symbolLoc.reserve_exact( sz, m_slab );
             f.Read( sz );
-            m_data.symbolLocInline.reserve_exact( sz, m_slab );
+            if( fileVer < FileVersion( 0, 7, 2 ) )
+            {
+                m_data.symbolLocInline.reserve_exact( sz + 1, m_slab );
+            }
+            else
+            {
+                m_data.symbolLocInline.reserve_exact( sz, m_slab );
+            }
             f.Read( sz );
             m_data.symbolMap.reserve( sz );
             int symIdx = 0;
@@ -1402,6 +1412,10 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                 {
                     m_data.symbolLoc[symIdx++] = SymbolLocation { symAddr, size.Val() };
                 }
+            }
+            if( fileVer < FileVersion( 0, 7, 2 ) )
+            {
+                m_data.symbolLocInline[symInlineIdx] = std::numeric_limits<uint64_t>::max();
             }
         }
         else
@@ -1426,6 +1440,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                     m_data.symbolLoc.push_back( SymbolLocation { symAddr, size.Val() } );
                 }
             }
+            m_data.symbolLocInline.push_back( std::numeric_limits<uint64_t>::max() );
         }
 #ifdef NO_PARALLEL_SORT
         pdqsort_branchless( m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
@@ -1660,6 +1675,8 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                     for( auto& t : m_data.threads )
                     {
                         if( m_shutdown.load( std::memory_order_relaxed ) ) return;
+                        // TODO remove when proper sample order is achieved during capture
+                        pdqsort_branchless( t->samples.begin(), t->samples.end(), [] ( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
                         for( auto& sd : t->samples )
                         {
                             gcnt += AddGhostZone( GetCallstack( sd.callstack.Val() ), &t->ghostZones, sd.time.Val() );
@@ -1668,6 +1685,39 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                     std::lock_guard<std::shared_mutex> lock( m_data.lock );
                     m_data.ghostZonesReady = true;
                     m_data.ghostCnt = gcnt;
+                } ) );
+
+                jobs.emplace_back( std::thread( [this] {
+                    for( auto& t : m_data.threads )
+                    {
+                        for( auto& v : t->samples )
+                        {
+                            const auto& time = v.time;
+                            const auto cs = v.callstack.Val();
+                            const auto& callstack = GetCallstack( cs );
+                            auto& ip = callstack[0];
+                            auto frame = GetCallstackFrame( ip );
+                            if( frame )
+                            {
+                                const auto symAddr = frame->data[0].symAddr;
+                                auto it = m_data.symbolSamples.find( symAddr );
+                                if( it == m_data.symbolSamples.end() )
+                                {
+                                    m_data.symbolSamples.emplace( symAddr, Vector<SampleDataRange>( SampleDataRange { time, ip } ) );
+                                }
+                                else
+                                {
+                                    it->second.push_back_non_empty( SampleDataRange { time, ip } );
+                                }
+                            }
+                        }
+                    }
+                    for( auto& v : m_data.symbolSamples )
+                    {
+                        pdqsort_branchless( v.second.begin(), v.second.end(), []( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
+                    }
+                    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+                    m_data.symbolSamplesReady = true;
                 } ) );
             }
 
@@ -2023,6 +2073,14 @@ const CallstackFrameData* Worker::GetParentCallstackFrame( const CallstackFrameI
         return it->second;
     }
 }
+
+const Vector<SampleDataRange>* Worker::GetSamplesForSymbol( uint64_t symAddr ) const
+{
+    assert( m_data.symbolSamplesReady );
+    auto it = m_data.symbolSamples.find( symAddr );
+    if( it == m_data.symbolSamples.end() ) return nullptr;
+    return &it->second;
+}
 #endif
 
 const SymbolData* Worker::GetSymbolData( uint64_t sym ) const
@@ -2036,6 +2094,11 @@ const SymbolData* Worker::GetSymbolData( uint64_t sym ) const
     {
         return &it->second;
     }
+}
+
+bool Worker::HasSymbolCode( uint64_t sym ) const
+{
+    return m_data.symbolCode.find( sym ) != m_data.symbolCode.end();
 }
 
 const char* Worker::GetSymbolCode( uint64_t sym, uint32_t& len ) const
@@ -2534,6 +2597,7 @@ void Worker::Exec()
         m_captureTime = welcome.epoch;
         m_ignoreMemFreeFaults = welcome.onDemand || welcome.isApple;
         m_data.cpuArch = (CpuArchitecture)welcome.cpuArch;
+        m_codeTransfer = welcome.codeTransfer;
         m_data.cpuId = welcome.cpuId;
         memcpy( m_data.cpuManufacturer, welcome.cpuManufacturer, 12 );
         m_data.cpuManufacturer[12] = '\0';
@@ -2622,23 +2686,27 @@ void Worker::Exec()
                 m_data.newFramesWereReceived = false;
             }
 #endif
-            if( m_data.newSymbolsWereAdded )
+            if( m_data.newSymbolsIndex >= 0 )
             {
-                m_data.newSymbolsWereAdded = false;
 #ifdef NO_PARALLEL_SORT
-                pdqsort_branchless( m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+                pdqsort_branchless( m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
 #else
-                std::sort( std::execution::par_unseq, m_data.symbolLoc.begin(), m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+                std::sort( std::execution::par_unseq, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
 #endif
+                const auto ms = std::lower_bound( m_data.symbolLoc.begin(), m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc[m_data.newSymbolsIndex], [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+                std::inplace_merge( ms, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+                m_data.newSymbolsIndex = -1;
             }
-            if( m_data.newInlineSymbolsWereAdded )
+            if( m_data.newInlineSymbolsIndex >= 0 )
             {
-                m_data.newInlineSymbolsWereAdded = false;
 #ifdef NO_PARALLEL_SORT
-                pdqsort_branchless( m_data.symbolLocInline.begin(), m_data.symbolLocInline.end() );
+                pdqsort_branchless( m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
 #else
-                std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin(), m_data.symbolLocInline.end() );
+                std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
 #endif
+                const auto ms = std::lower_bound( m_data.symbolLocInline.begin(), m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline[m_data.newInlineSymbolsIndex] );
+                std::inplace_merge( ms, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
+                m_data.newInlineSymbolsIndex = -1;
             }
 
             if( !m_serverQueryQueue.empty() && m_serverQuerySpaceLeft > 0 )
@@ -4893,7 +4961,7 @@ void Worker::ProcessGpuNewContext( const QueueGpuNewContext& ev )
 
     const auto cpuTime = TscTime( ev.cpuTime - m_data.baseTime );
     auto gpu = m_slab.AllocInit<GpuCtxData>();
-    memset( gpu->query, 0, sizeof( gpu->query ) );
+    memset( (char*)gpu->query, 0, sizeof( gpu->query ) );
     gpu->timeDiff = cpuTime - gpuTime;
     gpu->thread = ev.thread;
     gpu->period = ev.period;
@@ -5316,7 +5384,7 @@ void Worker::ProcessCallstackSample( const QueueCallstackSample& ev )
 #ifndef TRACY_NO_STATISTICS
     const auto& cs = GetCallstack( m_pendingCallstackId );
     {
-        auto& ip = cs[0];
+        const auto& ip = cs[0];
         auto frame = GetCallstackFrame( ip );
         if( frame )
         {
@@ -5338,6 +5406,23 @@ void Worker::ProcessCallstackSample( const QueueCallstackSample& ev )
                     fit->second++;
                 }
             }
+            auto sit = m_data.symbolSamples.find( symAddr );
+            if( sit == m_data.symbolSamples.end() )
+            {
+                m_data.symbolSamples.emplace( symAddr, Vector<SampleDataRange>( SampleDataRange { sd.time, ip } ) );
+            }
+            else
+            {
+                if( sit->second.back().time.Val() <= sd.time.Val() )
+                {
+                    sit->second.push_back_non_empty( SampleDataRange { sd.time, ip } );
+                }
+                else
+                {
+                    auto iit = std::upper_bound( sit->second.begin(), sit->second.end(), sd.time.Val(), [] ( const auto& lhs, const auto& rhs ) { return lhs < rhs.time.Val(); } );
+                    sit->second.insert( iit, SampleDataRange { sd.time, ip } );
+                }
+            }
         }
         else
         {
@@ -5350,11 +5435,19 @@ void Worker::ProcessCallstackSample( const QueueCallstackSample& ev )
             {
                 it->second++;
             }
+            auto sit = m_data.pendingSymbolSamples.find( ip );
+            if( sit == m_data.pendingSymbolSamples.end() )
+            {
+                m_data.pendingSymbolSamples.emplace( ip, Vector<SampleDataRange>( SampleDataRange { sd.time, ip } ) );
+            }
+            else
+            {
+                sit->second.push_back_non_empty( SampleDataRange { sd.time, ip } );
+            }
         }
     }
 
     const auto framesKnown = UpdateSampleStatistics( m_pendingCallstackId, 1, true );
-
     assert( td->samples.size() > td->ghostIdx );
     if( framesKnown && td->ghostIdx + 1 == td->samples.size() )
     {
@@ -5442,6 +5535,35 @@ void Worker::ProcessCallstackFrame( const QueueCallstackFrame& ev )
             }
             m_data.pendingInstructionPointers.erase( it );
         }
+        auto pit = m_data.pendingSymbolSamples.find( frameId );
+        if( pit != m_data.pendingSymbolSamples.end() )
+        {
+            if( ev.symAddr != 0 )
+            {
+                auto sit = m_data.symbolSamples.find( ev.symAddr );
+                if( sit == m_data.symbolSamples.end() )
+                {
+                    pdqsort_branchless( pit->second.begin(), pit->second.end(), [] ( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
+                    m_data.symbolSamples.emplace( ev.symAddr, std::move( pit->second ) );
+                }
+                else
+                {
+                    for( auto& v : pit->second )
+                    {
+                        if( sit->second.back().time.Val() <= v.time.Val() )
+                        {
+                            sit->second.push_back_non_empty( v );
+                        }
+                        else
+                        {
+                            auto iit = std::upper_bound( sit->second.begin(), sit->second.end(), v.time.Val(), [] ( const auto& lhs, const auto& rhs ) { return lhs < rhs.time.Val(); } );
+                            sit->second.insert( iit, v );
+                        }
+                    }
+                }
+            }
+            m_data.pendingSymbolSamples.erase( pit );
+        }
 #endif
 
         if( --m_pendingCallstackSubframes == 0 )
@@ -5475,7 +5597,7 @@ void Worker::ProcessSymbolInformation( const QueueSymbolInformation& ev )
     sd.size.SetVal( it->second.size );
     m_data.symbolMap.emplace( ev.symAddr, std::move( sd ) );
 
-    if( it->second.size > 0 && it->second.size <= 64*1024 )
+    if( m_codeTransfer && it->second.size > 0 && it->second.size <= 64*1024 )
     {
         assert( m_pendingSymbolCode.find( ev.symAddr ) == m_pendingSymbolCode.end() );
         m_pendingSymbolCode.emplace( ev.symAddr );
@@ -5484,12 +5606,12 @@ void Worker::ProcessSymbolInformation( const QueueSymbolInformation& ev )
 
     if( !it->second.isInline )
     {
-        if( !m_data.newSymbolsWereAdded ) m_data.newSymbolsWereAdded = true;
+        if( m_data.newSymbolsIndex < 0 ) m_data.newSymbolsIndex = int64_t( m_data.symbolLoc.size() );
         m_data.symbolLoc.push_back( SymbolLocation { ev.symAddr, it->second.size } );
     }
     else
     {
-        if( !m_data.newInlineSymbolsWereAdded ) m_data.newInlineSymbolsWereAdded = true;
+        if( m_data.newInlineSymbolsIndex < 0 ) m_data.newInlineSymbolsIndex = int64_t( m_data.symbolLocInline.size() );
         m_data.symbolLocInline.push_back( ev.symAddr );
     }
 
@@ -6949,7 +7071,7 @@ ZoneExtra& Worker::AllocZoneExtra( ZoneEvent& ev )
     assert( ev.extra == 0 );
     ev.extra = uint32_t( m_data.zoneExtra.size() );
     auto& extra = m_data.zoneExtra.push_next();
-    memset( &extra, 0, sizeof( extra ) );
+    memset( (char*)&extra, 0, sizeof( extra ) );
     return extra;
 }
 

@@ -24,11 +24,13 @@ public:
     ~Socket();
 
     bool Connect( const char* addr, int port );
+    bool ConnectBlocking( const char* addr, int port );
     void Close();
 
     int Send( const void* buf, int len );
     int GetSendBufSize();
 
+    int ReadUpTo( void* buf, int len, int timeout );
     bool Read( void* buf, int len, int timeout );
 
     template<typename ShouldExit>

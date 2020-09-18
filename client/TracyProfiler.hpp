@@ -5,6 +5,7 @@
 #include <atomic>
 #include <stdint.h>
 #include <string.h>
+#include <time.h>
 
 #include "tracy_concurrentqueue.h"
 #include "TracyCallstack.hpp"
@@ -29,11 +30,11 @@ __pragma(warning(disable:4668))
 #  include <mach/mach_time.h>
 #endif
 
-#if defined _WIN32 || defined __CYGWIN__ || ( ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) && !defined __ANDROID__ ) || __ARM_ARCH >= 6
+#if defined _WIN32 || defined __CYGWIN__ || ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) || ( defined TARGET_OS_IOS && TARGET_OS_IOS == 1 )
 #  define TRACY_HW_TIMER
 #endif
 
-#if !defined TRACY_HW_TIMER || ( defined __ARM_ARCH && __ARM_ARCH >= 6 && !defined CLOCK_MONOTONIC_RAW )
+#if !defined TRACY_HW_TIMER
   #include <chrono>
 #endif
 
@@ -136,14 +137,6 @@ public:
 #ifdef TRACY_HW_TIMER
 #  if defined TARGET_OS_IOS && TARGET_OS_IOS == 1
         return mach_absolute_time();
-#  elif defined __ARM_ARCH && __ARM_ARCH >= 6
-#    ifdef CLOCK_MONOTONIC_RAW
-        struct timespec ts;
-        clock_gettime( CLOCK_MONOTONIC_RAW, &ts );
-        return int64_t( ts.tv_sec ) * 1000000000ll + int64_t( ts.tv_nsec );
-#    else
-        return std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
-#    endif
 #  elif defined _WIN32 || defined __CYGWIN__
 #    ifdef TRACY_TIMER_QPC
         return GetTimeQpc();
@@ -158,9 +151,17 @@ public:
         uint64_t rax, rdx;
         asm volatile ( "rdtsc" : "=a" (rax), "=d" (rdx) );
         return ( rdx << 32 ) + rax;
+#  else
+#    error "TRACY_HW_TIMER detection logic needs fixing"
 #  endif
 #else
+#  if defined __linux__ && defined CLOCK_MONOTONIC_RAW
+        struct timespec ts;
+        clock_gettime( CLOCK_MONOTONIC_RAW, &ts );
+        return int64_t( ts.tv_sec ) * 1000000000ll + int64_t( ts.tv_nsec );
+#  else
         return std::chrono::duration_cast<std::chrono::nanoseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
+#  endif
 #endif
     }
 

@@ -277,8 +277,8 @@ private:
         unordered_flat_map<uint64_t, SymbolStats> symbolStats;
         Vector<SymbolLocation> symbolLoc;
         Vector<uint64_t> symbolLocInline;
-        bool newSymbolsWereAdded = false;
-        bool newInlineSymbolsWereAdded = false;
+        int64_t newSymbolsIndex = -1;
+        int64_t newInlineSymbolsIndex = -1;
 
 #ifndef TRACY_NO_STATISTICS
         unordered_flat_map<VarArray<CallstackFrameId>*, uint32_t, VarArrayHasher<CallstackFrameId>, VarArrayComparator<CallstackFrameId>> parentCallstackMap;
@@ -288,10 +288,13 @@ private:
         unordered_flat_map<uint32_t, uint32_t> postponedSamples;
         unordered_flat_map<CallstackFrameId, uint32_t, CallstackFrameIdHash, CallstackFrameIdCompare> pendingInstructionPointers;
         unordered_flat_map<uint64_t, unordered_flat_map<CallstackFrameId, uint32_t, CallstackFrameIdHash, CallstackFrameIdCompare>> instructionPointersMap;
+        unordered_flat_map<uint64_t, Vector<SampleDataRange>> symbolSamples;
+        unordered_flat_map<CallstackFrameId, Vector<SampleDataRange>, CallstackFrameIdHash, CallstackFrameIdCompare> pendingSymbolSamples;
         bool newFramesWereReceived = false;
         bool callstackSamplesReady = false;
         bool ghostZonesReady = false;
         bool ghostZonesPostponed = false;
+        bool symbolSamplesReady = false;
 #endif
 
         unordered_flat_map<uint32_t, LockMap*> lockMap;
@@ -490,6 +493,7 @@ public:
     CallstackFrameId PackPointer( uint64_t ptr ) const;
     uint64_t GetCanonicalPointer( const CallstackFrameId& id ) const;
     const SymbolData* GetSymbolData( uint64_t sym ) const;
+    bool HasSymbolCode( uint64_t sym ) const;
     const char* GetSymbolCode( uint64_t sym, uint32_t& len ) const;
     uint64_t GetSymbolForAddress( uint64_t address ) const;
     uint64_t GetSymbolForAddress( uint64_t address, uint32_t& offset ) const;
@@ -500,6 +504,7 @@ public:
 #ifndef TRACY_NO_STATISTICS
     const VarArray<CallstackFrameId>& GetParentCallstack( uint32_t idx ) const { return *m_data.parentCallstackPayload[idx]; }
     const CallstackFrameData* GetParentCallstackFrame( const CallstackFrameId& ptr ) const;
+    const Vector<SampleDataRange>* GetSamplesForSymbol( uint64_t symAddr ) const;
 #endif
 
     const CrashEvent& GetCrashEvent() const { return m_data.crashEvent; }
@@ -552,6 +557,7 @@ public:
     const unordered_flat_map<CallstackFrameId, uint32_t, CallstackFrameIdHash, CallstackFrameIdCompare>* GetSymbolInstructionPointers( uint64_t symAddr ) const;
     bool AreCallstackSamplesReady() const { return m_data.callstackSamplesReady; }
     bool AreGhostZonesReady() const { return m_data.ghostZonesReady; }
+    bool AreSymbolSamplesReady() const { return m_data.symbolSamplesReady; }
 #endif
 
     tracy_force_inline uint16_t CompressThread( uint64_t thread ) { return m_data.localThreadCompress.CompressThread( thread ); }
@@ -844,6 +850,7 @@ private:
     int m_bufferOffset;
     bool m_onDemand;
     bool m_ignoreMemFreeFaults;
+    bool m_codeTransfer;
 
     short_ptr<GpuCtxData> m_gpuCtxMap[256];
     uint64_t m_pendingCallstackPtr = 0;

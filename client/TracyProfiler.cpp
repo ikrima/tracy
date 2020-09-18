@@ -84,11 +84,6 @@
 #  endif
 #endif
 
-#if defined TRACY_HW_TIMER && __ARM_ARCH >= 6 && !defined TARGET_OS_IOS
-#  include <signal.h>
-#  include <setjmp.h>
-#endif
-
 #if defined _WIN32 || defined __CYGWIN__
 #  include <lmcons.h>
 extern "C" typedef LONG (WINAPI *t_RtlGetVersion)( PRTL_OSVERSIONINFOW );
@@ -543,6 +538,8 @@ static char s_crashText[1024];
 
 LONG WINAPI CrashFilter( PEXCEPTION_POINTERS pExp )
 {
+    if( !GetProfiler().IsConnected() ) return EXCEPTION_CONTINUE_SEARCH;
+
     const unsigned ec = pExp->ExceptionRecord->ExceptionCode;
     auto msgPtr = s_crashText;
     switch( ec )
@@ -1270,6 +1267,12 @@ void Profiler::Worker()
     uint8_t cpuArch = CpuArchUnknown;
 #endif
 
+#ifdef TRACY_NO_CODE_TRANSFER
+    uint8_t codeTransfer = 0;
+#else
+    uint8_t codeTransfer = 1;
+#endif
+
 #if defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64
     uint32_t regs[4];
     char manufacturer[12];
@@ -1297,6 +1300,7 @@ void Profiler::Worker()
     MemWrite( &welcome.onDemand, onDemand );
     MemWrite( &welcome.isApple, isApple );
     MemWrite( &welcome.cpuArch, cpuArch );
+    MemWrite( &welcome.codeTransfer, codeTransfer );
     memcpy( welcome.cpuManufacturer, manufacturer, 12 );
     MemWrite( &welcome.cpuId, cpuId );
     memcpy( welcome.programName, procname, pnsz );
@@ -2486,9 +2490,11 @@ bool Profiler::HandleServerQuery()
     case ServerQuerySymbol:
         HandleSymbolQuery( ptr );
         break;
+#ifndef TRACY_NO_CODE_TRANSFER
     case ServerQuerySymbolCode:
         HandleSymbolCodeQuery( ptr, extra );
         break;
+#endif
     case ServerQueryCodeLocation:
         SendCodeLocation( ptr );
         break;
@@ -2585,9 +2591,6 @@ void Profiler::HandleDisconnect()
 void Profiler::CalibrateTimer()
 {
 #ifdef TRACY_HW_TIMER
-#  if !defined TARGET_OS_IOS && __ARM_ARCH >= 6
-    m_timerMul = 1.;
-#  else
     std::atomic_signal_fence( std::memory_order_acq_rel );
     const auto t0 = std::chrono::high_resolution_clock::now();
     const auto r0 = GetTime();
@@ -2602,7 +2605,6 @@ void Profiler::CalibrateTimer()
     const auto dr = r1 - r0;
 
     m_timerMul = double( dt ) / double( dr );
-#  endif
 #else
     m_timerMul = 1.;
 #endif

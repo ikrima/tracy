@@ -56,29 +56,6 @@ class View
         uint64_t count;
     };
 
-    struct Range
-    {
-        void StartFrame() { hiMin = hiMax = false; }
-
-        int64_t min = 0;
-        int64_t max = 0;
-        bool active = false;
-        bool hiMin = false;
-        bool hiMax = false;
-        bool modMin = false;
-        bool modMax = false;
-    };
-
-    struct RangeSlim
-    {
-        bool operator==( const Range& other ) const { return other.active == active && other.min == min && other.max == max; }
-        bool operator!=( const Range& other ) const { return !(*this == other); }
-        void operator=( const Range& other ) { active = other.active; min = other.min; max = other.max; }
-
-        int64_t min, max;
-        bool active = false;
-    };
-
 public:
     struct VisData
     {
@@ -98,9 +75,9 @@ public:
     using SetTitleCallback = void(*)( const char* );
     using GetWindowCallback = void*(*)();
 
-    View( ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr ) : View( "127.0.0.1", 8086, fixedWidth, smallFont, bigFont, stcb, gwcb ) {}
-    View( const char* addr, int port, ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr );
-    View( FileRead& f, ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr );
+    View( void(*cbMainThread)(std::function<void()>), ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr ) : View( cbMainThread, "127.0.0.1", 8086, fixedWidth, smallFont, bigFont, stcb, gwcb ) {}
+    View( void(*cbMainThread)(std::function<void()>), const char* addr, int port, ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr );
+    View( void(*cbMainThread)(std::function<void()>), FileRead& f, ImFont* fixedWidth = nullptr, ImFont* smallFont = nullptr, ImFont* bigFont = nullptr, SetTitleCallback stcb = nullptr, GetWindowCallback gwcb = nullptr );
     ~View();
 
     static bool Draw();
@@ -117,6 +94,11 @@ public:
     const char* SourceSubstitution( const char* srcFile ) const;
 
     void ShowSampleParents( uint64_t symAddr ) { m_sampleParents.symAddr = symAddr; m_sampleParents.sel = 0; }
+    const ViewData& GetViewData() const { return m_vd; }
+
+
+    bool m_showRanges = false;
+    Range m_statRange;
 
 private:
     enum class Namespace : uint8_t
@@ -138,6 +120,13 @@ private:
     {
         uint32_t cnt;
         uint64_t mem;
+    };
+
+    enum class ViewMode
+    {
+        Paused,
+        LastFrames,
+        LastRange
     };
 
     void InitTextEditor( ImFont* font );
@@ -195,6 +184,7 @@ private:
     void DrawAnnotationList();
     void DrawSampleParents();
     void DrawRanges();
+    void DrawRangeEntry( Range& range, const char* label, uint32_t color, const char* popupLabel, int id );
 
     void ListMemData( std::vector<const MemEvent*>& vec, std::function<void(const MemEvent*)> DrawAddress, const char* id = nullptr, int64_t startTime = -1 );
 
@@ -230,7 +220,7 @@ private:
 
     void ZoomToZone( const ZoneEvent& ev );
     void ZoomToZone( const GpuEvent& ev );
-    void ZoomToRange( int64_t start, int64_t end );
+    void ZoomToRange( int64_t start, int64_t end, bool pause = true );
     void ZoomToPrevFrame();
     void ZoomToNextFrame();
     void CenterAtTime( int64_t t );
@@ -326,7 +316,7 @@ private:
     Worker m_worker;
     std::string m_filename;
     bool m_staticView;
-    bool m_pause;
+    ViewMode m_viewMode;
     DecayValue<bool> m_forceConnectionPopup = false;
 
     ViewData m_vd;
@@ -353,7 +343,6 @@ private:
     bool m_messagesScrollBottom;
     ImGuiTextFilter m_messageFilter;
     bool m_showMessageImages = false;
-    ImGuiTextFilter m_statisticsFilter;
     int m_visibleMessages = 0;
     size_t m_prevMessages = 0;
     Vector<uint32_t> m_msgList;
@@ -362,6 +351,9 @@ private:
     DecayValue<uint64_t> m_drawThreadHighlight = 0;
     Annotation* m_selectedAnnotation = nullptr;
     bool m_reactToCrash = false;
+
+    ImGuiTextFilter m_statisticsFilter;
+    ImGuiTextFilter m_statisticsImageFilter;
 
     Region m_highlight;
     Region m_highlightZoom;
@@ -378,7 +370,6 @@ private:
     bool m_showPlayback = false;
     bool m_showCpuDataWindow = false;
     bool m_showAnnotationList = false;
-    bool m_showRanges = false;
 
     enum class CpuDataSortBy
     {
@@ -465,11 +456,15 @@ private:
 
     bool m_reconnectRequested = false;
     int m_firstFrame = 10;
+    float m_yDelta;
 
     std::vector<SourceRegex> m_sourceSubstitutions;
     bool m_sourceRegexValid = true;
 
     RangeSlim m_setRangePopup;
+    bool m_setRangePopupOpen = false;
+
+    void(*m_cbMainThread)(std::function<void()>);
 
     struct FindZone {
         enum : uint64_t { Unselected = std::numeric_limits<uint64_t>::max() - 1 };

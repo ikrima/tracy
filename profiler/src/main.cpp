@@ -22,8 +22,6 @@
 #ifdef _WIN32
 #  include <windows.h>
 #  include <shellapi.h>
-#  define GLFW_EXPOSE_NATIVE_WIN32
-#  include <GLFW/glfw3native.h>
 #endif
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -34,11 +32,13 @@
 #include "../../server/tracy_pdqsort.h"
 #include "../../server/tracy_robin_hood.h"
 #include "../../server/TracyBadVersion.hpp"
+#include "../../server/TracyFileHeader.hpp"
 #include "../../server/TracyFileRead.hpp"
 #include "../../server/TracyImGui.hpp"
 #include "../../server/TracyMouse.hpp"
 #include "../../server/TracyPrint.hpp"
 #include "../../server/TracyStorage.hpp"
+#include "../../server/TracyVersion.hpp"
 #include "../../server/TracyView.hpp"
 #include "../../server/TracyWorker.hpp"
 #include "../../server/TracyVersion.hpp"
@@ -50,6 +50,8 @@
 #include "FontAwesomeSolid.hpp"
 #include "icon.hpp"
 #include "ResolvService.hpp"
+#include "NativeWindow.hpp"
+#include "HttpRequest.hpp"
 
 static void glfw_error_callback(int error, const char* description)
 {
@@ -71,12 +73,14 @@ static void OpenWebpage( const char* url )
 #endif
 }
 
-static GLFWwindow* s_glfwWindow = nullptr;
+GLFWwindow* s_glfwWindow = nullptr;
 static bool s_customTitle = false;
 static void SetWindowTitleCallback( const char* title )
 {
     assert( s_glfwWindow );
-    glfwSetWindowTitle( s_glfwWindow, title );
+    char tmp[1024];
+    sprintf( tmp, "%s - Tracy Profiler %i.%i.%i", title, tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch );
+    glfwSetWindowTitle( s_glfwWindow, tmp );
     s_customTitle = true;
 }
 
@@ -84,15 +88,6 @@ static void DrawContents();
 static void WindowRefreshCallback( GLFWwindow* window )
 {
     DrawContents();
-}
-
-void* GetMainWindowNative()
-{
-#ifdef _WIN32
-    return (void*)glfwGetWin32Window( s_glfwWindow );
-#else
-    return nullptr;
-#endif
 }
 
 std::vector<std::unordered_map<std::string, uint64_t>::const_iterator> RebuildConnectionHistory( const std::unordered_map<std::string, uint64_t>& connHistMap )
@@ -125,7 +120,7 @@ static tracy::BadVersionState badVer;
 static int port = 8086;
 static const char* connectTo = nullptr;
 static char title[128];
-static std::thread loadThread;
+static std::thread loadThread, updateThread, updateNotesThread;
 static std::unique_ptr<tracy::UdpListen> broadcastListen;
 static std::mutex resolvLock;
 static tracy::unordered_flat_map<std::string, std::string> resolvMap;
@@ -140,6 +135,25 @@ static std::atomic<ViewShutdown> viewShutdown { ViewShutdown::False };
 static double animTime = 0;
 static float dpiScale = 1.f;
 static ImGuiTextFilter addrFilter, portFilter, progFilter;
+static std::thread::id mainThread;
+static std::vector<std::function<void()>> mainThreadTasks;
+static std::mutex mainThreadLock;
+static uint32_t updateVersion = 0;
+static bool showReleaseNotes = false;
+static std::string releaseNotes;
+
+void RunOnMainThread( std::function<void()> cb )
+{
+    if( std::this_thread::get_id() == mainThread )
+    {
+        cb();
+    }
+    else
+    {
+        std::lock_guard<std::mutex> lock( mainThreadLock );
+        mainThreadTasks.emplace_back( cb );
+    }
+}
 
 int main( int argc, char** argv )
 {
@@ -212,6 +226,20 @@ int main( int argc, char** argv )
             fclose( f );
         }
     }
+
+    mainThread = std::this_thread::get_id();
+
+    updateThread = std::thread( [] {
+        HttpRequest( "nereid.pl", "/tracy/version", 8099, [] ( int size, char* data ) {
+            if( size == 4 )
+            {
+                uint32_t ver;
+                memcpy( &ver, data, 4 );
+                RunOnMainThread( [ver] { updateVersion = ver; } );
+            }
+            delete[] data;
+        } );
+    } );
 
     // Setup window
     glfwSetErrorCallback(glfw_error_callback);
@@ -306,7 +334,7 @@ int main( int argc, char** argv )
         auto f = std::unique_ptr<tracy::FileRead>( tracy::FileRead::Open( argv[1] ) );
         if( f )
         {
-            view = std::make_unique<tracy::View>( *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+            view = std::make_unique<tracy::View>( RunOnMainThread, *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
         }
     }
     else
@@ -332,7 +360,7 @@ int main( int argc, char** argv )
     }
     if( connectTo )
     {
-        view = std::make_unique<tracy::View>( connectTo, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+        view = std::make_unique<tracy::View>( RunOnMainThread, connectTo, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
     }
 
     glfwShowWindow( window );
@@ -351,9 +379,19 @@ int main( int argc, char** argv )
         {
             std::this_thread::sleep_for( std::chrono::milliseconds( 50 ) );
         }
+        std::unique_lock<std::mutex> lock( mainThreadLock );
+        if( !mainThreadTasks.empty() )
+        {
+            std::vector<std::function<void()>> tmp;
+            std::swap( tmp, mainThreadTasks );
+            lock.unlock();
+            for( auto& cb : tmp ) cb();
+        }
     }
 
     if( loadThread.joinable() ) loadThread.join();
+    if( updateThread.joinable() ) updateThread.join();
+    if( updateNotesThread.joinable() ) updateNotesThread.join();
     view.reset();
 
     {
@@ -440,6 +478,8 @@ static void DrawContents()
     ImGui::NewFrame();
     tracy::MouseFrame();
 
+    setlocale( LC_NUMERIC, "C" );
+
     if( !view )
     {
         if( s_customTitle )
@@ -521,7 +561,6 @@ static void DrawContents()
             }
         }
 
-        setlocale( LC_NUMERIC, "C" );
         auto& style = ImGui::GetStyle();
         style.Colors[ImGuiCol_WindowBg] = ImVec4( 0.129f, 0.137f, 0.11f, 1.f );
         ImGui::Begin( "Get started", nullptr, ImGuiWindowFlags_AlwaysAutoResize );
@@ -583,6 +622,26 @@ static void DrawContents()
         {
             OpenWebpage( "https://github.com/sponsors/wolfpld/" );
         }
+        if( updateVersion != 0 && updateVersion > tracy::FileVersion( tracy::Version::Major, tracy::Version::Minor, tracy::Version::Patch ) )
+        {
+            ImGui::Separator();
+            ImGui::TextColored( ImVec4( 1, 1, 0, 1 ), ICON_FA_EXCLAMATION " Update to %i.%i.%i is available!", ( updateVersion >> 16 ) & 0xFF, ( updateVersion >> 8 ) & 0xFF, updateVersion & 0xFF );
+            ImGui::SameLine();
+            if( ImGui::SmallButton( ICON_FA_GIFT " Get it!" ) )
+            {
+                showReleaseNotes = true;
+                if( !updateNotesThread.joinable() )
+                {
+                    updateNotesThread = std::thread( [] {
+                        HttpRequest( "nereid.pl", "/tracy/notes", 8099, [] ( int size, char* data ) {
+                            std::string notes( data, data+size );
+                            delete[] data;
+                            RunOnMainThread( [notes = move( notes )] { releaseNotes = std::move( notes ); } );
+                        } );
+                    } );
+                }
+            }
+        }
         ImGui::Separator();
         ImGui::TextUnformatted( "Client address" );
         bool connectClicked = false;
@@ -636,11 +695,11 @@ static void DrawContents()
             {
                 std::string addrPart = std::string( addr, ptr );
                 uint32_t portPart = atoi( ptr+1 );
-                view = std::make_unique<tracy::View>( addrPart.c_str(), portPart, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                view = std::make_unique<tracy::View>( RunOnMainThread, addrPart.c_str(), portPart, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
             }
             else
             {
-                view = std::make_unique<tracy::View>( addr, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                view = std::make_unique<tracy::View>( RunOnMainThread, addr, port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
             }
         }
         ImGui::SameLine( 0, ImGui::GetFontSize() * 2 );
@@ -658,7 +717,7 @@ static void DrawContents()
                         loadThread = std::thread( [f] {
                             try
                             {
-                                view = std::make_unique<tracy::View>( *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                                view = std::make_unique<tracy::View>( RunOnMainThread, *f, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
                             }
                             catch( const tracy::UnsupportedVersion& e )
                             {
@@ -780,7 +839,7 @@ static void DrawContents()
                 }
                 if( selected && !loadThread.joinable() )
                 {
-                    view = std::make_unique<tracy::View>( v.second.address.c_str(), v.second.port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+                    view = std::make_unique<tracy::View>( RunOnMainThread, v.second.address.c_str(), v.second.port, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
                 }
                 ImGui::NextColumn();
                 const auto acttime = ( v.second.activeTime + ( time - v.second.time ) / 1000 ) * 1000000000ll;
@@ -810,11 +869,38 @@ static void DrawContents()
                 ImGui::TextUnformatted( "All clients are filtered." );
             }
         }
-
         ImGui::End();
+
+        if( showReleaseNotes )
+        {
+            assert( updateNotesThread.joinable() );
+            ImGui::SetNextWindowSize( ImVec2( 600, 400 ), ImGuiCond_FirstUseEver );
+            ImGui::Begin( "Update available!", &showReleaseNotes );
+            if( ImGui::Button( ICON_FA_DOWNLOAD " Download" ) )
+            {
+                OpenWebpage( "https://github.com/wolfpld/tracy/releases" );
+            }
+            ImGui::BeginChild( "###notes", ImVec2( 0, 0 ), true );
+            if( releaseNotes.empty() )
+            {
+                static float rnTime = 0;
+                rnTime += ImGui::GetIO().DeltaTime;
+                tracy::TextCentered( "Fetching release notes..." );
+                tracy::DrawWaitingDots( rnTime );
+            }
+            else
+            {
+                ImGui::PushFont( fixedWidth );
+                ImGui::TextUnformatted( releaseNotes.c_str() );
+                ImGui::PopFont();
+            }
+            ImGui::EndChild();
+            ImGui::End();
+        }
     }
     else
     {
+        if( showReleaseNotes ) showReleaseNotes = false;
         if( broadcastListen )
         {
             broadcastListen.reset();
@@ -920,7 +1006,7 @@ static void DrawContents()
         viewShutdown.store( ViewShutdown::False, std::memory_order_relaxed );
         if( reconnect )
         {
-            view = std::make_unique<tracy::View>( reconnectAddr.c_str(), reconnectPort, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
+            view = std::make_unique<tracy::View>( RunOnMainThread, reconnectAddr.c_str(), reconnectPort, fixedWidth, smallFont, bigFont, SetWindowTitleCallback, GetMainWindowNative );
         }
         break;
     default:

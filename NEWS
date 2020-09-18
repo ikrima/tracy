@@ -6,7 +6,24 @@ Note: Release numbers are nothing more than numbers. There are some
 "missing" versions due to trace file changes during development. This is not
 a mistake.
 
-v0.7.1 (xxxx-xx-xx)
+v0.7.2 (2020-09-14)
+-------------------
+
+- Note: the bitbucket repository is obsolete and will soon stop receiving
+  updates. Migrate to https://github.com/wolfpld/tracy, if you haven't
+  already.
+- The "waiting for connection" dialog no longer has "cancel" button. To
+  abort connection attempt just use the "close window" button.
+- Added update notification.
+- The most recent traced events can be now viewed regardless of timeline
+  zoom level.
+- Fixed going-to-line in source view (again).
+- Crash handling on client is now not performed, if there is no active
+  connection.
+- Added ability to listen only on IPv4 interfaces.
+
+
+v0.7.1 (2020-08-24)
 -------------------
 
 - Dropped support for pre-v0.6 traces.
@@ -26,7 +43,18 @@ v0.7.1 (xxxx-xx-xx)
 - Added macro for checking if profiler is connected.
 - Implemented optional data removal from traces in the update utility.
 - Allow manual management of profiler lifetime.
-- Find zone range limit can be now adjusted using the mouse.
+- Adjusted priority of ETW threads to time critical.
+- Annotations can be now freely adjusted on the timeline.
+- Limiting time range for find zone functionality has been significantly
+  improved.
+- Added time range limits for statistics and symbol view.
+- Implemented call stack sampling on Linux (including Android).
+- Exact time from start of profiling session can be now viewed by hovering
+  the mouse over the time scale.
+- Code transfer can be now compiled-out.
+- Added support for zone markup in unloadable modules.
+- Added image name filter to sampling statistics results window.
+
 
 v0.7 (2020-06-11)
 -----------------
@@ -89,6 +117,7 @@ update utility to convert your old traces now!
 - OpenCL profiling.
 - Direct3D 12 profiling.
 
+
 v0.6.3 (2020-02-13)
 -------------------
 
@@ -109,6 +138,7 @@ v0.6.3 (2020-02-13)
 - Frame images are now internally compressed using Zstd (instead of LZ4).
 - Fix display of continuous frame set tooltips.
 
+
 v0.6.2 (2019-12-30)
 -------------------
 
@@ -123,6 +153,7 @@ v0.6.2 (2019-12-30)
 - Highlight hovered zone from find zone menu zone list on the histogram.
 - Allow copying user data directory location to the clipboard.
 
+
 v0.6.1 (2019-11-28)
 -------------------
 
@@ -133,6 +164,7 @@ v0.6.1 (2019-11-28)
 - Added CPU thread highlight for CPU data items.
 - Client parameters may be now set from the server.
 - Minor UI fixes.
+
 
 v0.6 (2019-11-17)
 -----------------
@@ -192,6 +224,7 @@ update utility to convert your old traces now!
 - Zone list in the statistics window can be now filtered.
 - Implemented configuration of plots.
 - Messages can now collect call stacks.
+
 
 v0.5 (2019-08-10)
 -----------------
@@ -280,6 +313,7 @@ update utility to convert your old traces now!
 - GPU drift value can be now automatically measured.
 - Connection window is now a popup hidden under a dedicated button.
 
+
 v0.4.1 (2018-12-30)
 -------------------
 
@@ -306,6 +340,7 @@ v0.4.1 (2018-12-30)
   profiler application (use "-a address" argument to enable).
 - Pressing enter key after entering client address in the welcome dialog
   will now automatically begin connection process.
+
 
 v0.4 (2018-10-09)
 -----------------
