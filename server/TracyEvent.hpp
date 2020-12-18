@@ -207,6 +207,7 @@ struct ZoneExtra
     Int24 callstack;
     StringIdx text;
     StringIdx name;
+    Int24 color;
 };
 
 enum { ZoneExtraSize = sizeof( ZoneExtra ) };
@@ -653,6 +654,8 @@ struct MemData
     uint64_t low = std::numeric_limits<uint64_t>::max();
     uint64_t usage = 0;
     PlotData* plot = nullptr;
+    bool reconstruct = false;
+    uint64_t name = 0;
 };
 
 struct FrameData

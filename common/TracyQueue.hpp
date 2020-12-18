@@ -33,9 +33,13 @@ enum class QueueType : uint8_t
     LockSharedRelease,
     LockName,
     MemAlloc,
+    MemAllocNamed,
     MemFree,
+    MemFreeNamed,
     MemAllocCallstack,
+    MemAllocCallstackNamed,
     MemFreeCallstack,
+    MemFreeCallstackNamed,
     GpuZoneBegin,
     GpuZoneBeginCallstack,
     GpuZoneEnd,
@@ -53,6 +57,7 @@ enum class QueueType : uint8_t
     Crash,
     CrashReport,
     ZoneValidation,
+    ZoneColor,
     ZoneValue,
     FrameMarkMsg,
     FrameMarkMsgStart,
@@ -78,6 +83,7 @@ enum class QueueType : uint8_t
     CpuTopology,
     SingleStringData,
     SecondStringData,
+    MemNamePayload,
     StringData,
     ThreadName,
     PlotName,
@@ -117,6 +123,13 @@ struct QueueZoneEnd
 struct QueueZoneValidation
 {
     uint32_t id;
+};
+
+struct QueueZoneColor
+{
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
 };
 
 struct QueueZoneValue
@@ -336,6 +349,11 @@ struct QueueGpuCalibration
     uint8_t context;
 };
 
+struct QueueMemNamePayload
+{
+    uint64_t name;
+};
+
 struct QueueMemAlloc
 {
     int64_t time;
@@ -479,6 +497,7 @@ struct QueueItem
         QueueZoneBeginLean zoneBeginLean;
         QueueZoneEnd zoneEnd;
         QueueZoneValidation zoneValidation;
+        QueueZoneColor zoneColor;
         QueueZoneValue zoneValue;
         QueueStringTransfer stringTransfer;
         QueueFrameMark frameMark;
@@ -508,6 +527,7 @@ struct QueueItem
         QueueGpuCalibration gpuCalibration;
         QueueMemAlloc memAlloc;
         QueueMemFree memFree;
+        QueueMemNamePayload memName;
         QueueCallstackFat callstackFat;
         QueueCallstackAllocFat callstackAllocFat;
         QueueCallstackSample callstackSample;
@@ -557,9 +577,13 @@ static constexpr size_t QueueDataSize[] = {
     sizeof( QueueHeader ) + sizeof( QueueLockRelease ),     // shared
     sizeof( QueueHeader ) + sizeof( QueueLockName ),
     sizeof( QueueHeader ) + sizeof( QueueMemAlloc ),
+    sizeof( QueueHeader ) + sizeof( QueueMemAlloc ),        // named
     sizeof( QueueHeader ) + sizeof( QueueMemFree ),
+    sizeof( QueueHeader ) + sizeof( QueueMemFree ),         // named
     sizeof( QueueHeader ) + sizeof( QueueMemAlloc ),        // callstack
+    sizeof( QueueHeader ) + sizeof( QueueMemAlloc ),        // callstack, named
     sizeof( QueueHeader ) + sizeof( QueueMemFree ),         // callstack
+    sizeof( QueueHeader ) + sizeof( QueueMemFree ),         // callstack, named
     sizeof( QueueHeader ) + sizeof( QueueGpuZoneBegin ),
     sizeof( QueueHeader ) + sizeof( QueueGpuZoneBegin ),    // callstack
     sizeof( QueueHeader ) + sizeof( QueueGpuZoneEnd ),
@@ -578,6 +602,7 @@ static constexpr size_t QueueDataSize[] = {
     sizeof( QueueHeader ),                                  // crash
     sizeof( QueueHeader ) + sizeof( QueueCrashReport ),
     sizeof( QueueHeader ) + sizeof( QueueZoneValidation ),
+    sizeof( QueueHeader ) + sizeof( QueueZoneColor ),
     sizeof( QueueHeader ) + sizeof( QueueZoneValue ),
     sizeof( QueueHeader ) + sizeof( QueueFrameMark ),       // continuous frames
     sizeof( QueueHeader ) + sizeof( QueueFrameMark ),       // start
@@ -603,6 +628,7 @@ static constexpr size_t QueueDataSize[] = {
     sizeof( QueueHeader ) + sizeof( QueueCpuTopology ),
     sizeof( QueueHeader ),                                  // single string data
     sizeof( QueueHeader ),                                  // second string data
+    sizeof( QueueHeader ) + sizeof( QueueMemNamePayload ),
     // keep all QueueStringTransfer below
     sizeof( QueueHeader ) + sizeof( QueueStringTransfer ),  // string data
     sizeof( QueueHeader ) + sizeof( QueueStringTransfer ),  // thread name

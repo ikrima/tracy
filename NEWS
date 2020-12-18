@@ -6,6 +6,50 @@ Note: Release numbers are nothing more than numbers. There are some
 "missing" versions due to trace file changes during development. This is not
 a mistake.
 
+v0.x.x (xxxx-xx-xx)
+-------------------
+
+- More robust handling of system tracing on Android.
+- Added warning dialog when the connection is lost before all needed data
+  can be retrieved.
+- Dynamic zone colors are now supported through the ZoneColor() macro.
+- Fixed Arm machine code printout to match the one printed by objdump.
+
+
+v0.7.4 (2020-11-15)
+-------------------
+
+- Added support for user-provided locks to keep dbghelp calls thread-safe.
+- Call stacks can be now copied to clipboard.
+- Allow more control over which automated captures are performed.
+- Added textual descriptions for some assembly instructions.
+- Profiler memory usage is now also displayed as a percentage of available
+  physical memory.
+- Microarchitecture mismatch is now clearly displayed in the source view
+  window.
+- Added Zen 3 and Cascade Lake microarchitectural data.
+- Ghost zones are now supporting all zone coloring modes and namespace
+  shortening.
+- Extend C API to support memory pools.
+- Frame rate targets can be now visually represented on the timeline view.
+
+
+v0.7.3 (2020-10-06)
+-------------------
+
+- Properly support DPI scaling on Linux (requires GLFW 3.3).
+- Added early checks for output file validity in the capture utility.
+- Improvements to presence broadcast handling.
+- Custom zone colors can be optionally ignored.
+- Added support for tracking multiple memory pools.
+- Memory free failure dialog can now show call stack pointing to the failure
+  location.
+- Added support for Wayland on Linux.
+- If during the first 5 seconds of the trace there are no frames being
+  reported, the profiler will switch to following last 5 seconds of the
+  trace, instead of displaying three last frames.
+
+
 v0.7.2 (2020-09-14)
 -------------------
 

@@ -41,6 +41,14 @@
 #  include "TargetConditionals.h"
 #endif
 
+#ifdef __ANDROID__
+#  include <sys/mman.h>
+#  include <stdio.h>
+#  include <stdint.h>
+#  include <algorithm>
+#  include <vector>
+#endif
+
 #include <algorithm>
 #include <assert.h>
 #include <atomic>
@@ -227,7 +235,11 @@ static int64_t SetupHwTimer()
         const char* noCheck = getenv( "TRACY_NO_INVARIANT_CHECK" );
         if( !noCheck || noCheck[0] != '1' )
         {
+#if defined _WIN32 || defined __CYGWIN__
             InitFailure( "CPU doesn't support invariant TSC.\nDefine TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.\nAlternatively you may rebuild the application with the TRACY_TIMER_QPC define to use lower resolution timer." );
+#else
+            InitFailure( "CPU doesn't support invariant TSC.\nDefine TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*." );
+#endif
         }
     }
 #endif
@@ -590,12 +602,12 @@ LONG WINAPI CrashFilter( PEXCEPTION_POINTERS pExp )
     }
 
     {
+        GetProfiler().SendCallstack( 60, "KiUserExceptionDispatcher" );
+
         TracyLfqPrepare( QueueType::CrashReport );
         item->crashReport.time = Profiler::GetTime();
         item->crashReport.text = (uint64_t)s_crashText;
         TracyLfqCommit;
-
-        GetProfiler().SendCallstack( 60, "KiUserExceptionDispatcher" );
     }
 
     HANDLE h = CreateToolhelp32Snapshot( TH32CS_SNAPTHREAD, 0 );
@@ -822,12 +834,12 @@ static void CrashHandler( int signal, siginfo_t* info, void* /*ucontext*/ )
     }
 
     {
+        GetProfiler().SendCallstack( 60, "__kernel_rt_sigreturn" );
+
         TracyLfqPrepare( QueueType::CrashReport );
         item->crashReport.time = Profiler::GetTime();
         item->crashReport.text = (uint64_t)s_crashText;
         TracyLfqCommit;
-
-        GetProfiler().SendCallstack( 60, "__kernel_rt_sigreturn" );
     }
 
     DIR* dp = opendir( "/proc/self/task" );
@@ -1369,6 +1381,11 @@ void Profiler::Worker()
 #ifndef TRACY_NO_EXIT
             if( !m_noExit && ShouldExit() )
             {
+                if( m_broadcast )
+                {
+                    broadcastMsg.activeTime = -1;
+                    m_broadcast->Send( broadcastPort, &broadcastMsg, broadcastLen );
+                }
                 m_shutdownFinished.store( true, std::memory_order_relaxed );
                 return;
             }
@@ -1386,10 +1403,18 @@ void Profiler::Worker()
                 {
                     lastBroadcast = t;
                     const auto ts = std::chrono::duration_cast<std::chrono::seconds>( std::chrono::system_clock::now().time_since_epoch() ).count();
-                    broadcastMsg.activeTime = uint32_t( ts - m_epoch );
+                    broadcastMsg.activeTime = int32_t( ts - m_epoch );
+                    assert( broadcastMsg.activeTime >= 0 );
                     m_broadcast->Send( broadcastPort, &broadcastMsg, broadcastLen );
                 }
             }
+        }
+
+        if( m_broadcast )
+        {
+            lastBroadcast = 0;
+            broadcastMsg.activeTime = -1;
+            m_broadcast->Send( broadcastPort, &broadcastMsg, broadcastLen );
         }
 
         // Handshake
@@ -1723,10 +1748,13 @@ static void FreeAssociatedMemory( const QueueItem& item )
         ptr = MemRead<uint64_t>( &item.zoneTextFat.text );
         tracy_free( (void*)ptr );
         break;
-    case QueueType::Message:
     case QueueType::MessageColor:
-    case QueueType::MessageCallstack:
     case QueueType::MessageColorCallstack:
+        ptr = MemRead<uint64_t>( &item.messageColorFat.text );
+        tracy_free( (void*)ptr );
+        break;
+    case QueueType::Message:
+    case QueueType::MessageCallstack:
 #ifndef TRACY_ON_DEMAND
     case QueueType::MessageAppInfo:
 #endif
@@ -2143,7 +2171,9 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
                     break;
                 }
                 case QueueType::MemAlloc:
+                case QueueType::MemAllocNamed:
                 case QueueType::MemAllocCallstack:
+                case QueueType::MemAllocCallstackNamed:
                 {
                     int64_t t = MemRead<int64_t>( &item->memAlloc.time );
                     int64_t dt = t - refSerial;
@@ -2152,7 +2182,9 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
                     break;
                 }
                 case QueueType::MemFree:
+                case QueueType::MemFreeNamed:
                 case QueueType::MemFreeCallstack:
+                case QueueType::MemFreeCallstackNamed:
                 {
                     int64_t t = MemRead<int64_t>( &item->memFree.time );
                     int64_t dt = t - refSerial;
@@ -2804,10 +2836,9 @@ void Profiler::ReportTopology()
 void Profiler::SendCallstack( int depth, const char* skipBefore )
 {
 #ifdef TRACY_HAS_CALLSTACK
+    TracyLfqPrepare( QueueType::Callstack );
     auto ptr = Callstack( depth );
     CutCallstack( ptr, skipBefore );
-
-    TracyLfqPrepare( QueueType::Callstack );
     MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
     TracyLfqCommit;
 #endif
@@ -2869,9 +2900,157 @@ void Profiler::HandleParameter( uint64_t payload )
     TracyLfqCommit;
 }
 
+#ifdef __ANDROID__
+// Implementation helpers of EnsureReadable(address).
+// This is so far only needed on Android, where it is common for libraries to be mapped
+// with only executable, not readable, permissions. Typical example (line from /proc/self/maps):
+/*
+746b63b000-746b6dc000 --xp 00042000 07:48 35                             /apex/com.android.runtime/lib64/bionic/libc.so
+*/
+// See https://github.com/wolfpld/tracy/issues/125 .
+// To work around this, we parse /proc/self/maps and we use mprotect to set read permissions
+// on any mappings that contain symbols addresses hit by HandleSymbolCodeQuery.
+
+namespace {
+// Holds some information about a single memory mapping.
+struct MappingInfo {
+    // Start of address range. Inclusive.
+    uintptr_t start_address;
+    // End of address range. Exclusive, so the mapping is the half-open interval
+    // [start, end) and its length in bytes is `end - start`. As in /proc/self/maps.
+    uintptr_t end_address;
+    // Read/Write/Executable permissions.
+    bool perm_r, perm_w, perm_x;
+};
+}  // anonymous namespace
+
+// Internal implementation helper for LookUpMapping(address).
+//
+// Parses /proc/self/maps returning a vector<MappingInfo>.
+// /proc/self/maps is assumed to be sorted by ascending address, so the resulting
+// vector is sorted by ascending address too.
+static std::vector<MappingInfo> ParseMappings()
+{
+    std::vector<MappingInfo> result;
+    FILE* file = fopen( "/proc/self/maps", "r" );
+    if( !file ) return result;
+    char line[1024];
+    while( fgets( line, sizeof( line ), file ) )
+    {
+        uintptr_t start_addr;
+        uintptr_t end_addr;
+        if( sscanf( line, "%lx-%lx", &start_addr, &end_addr ) != 2 ) continue;
+        char* first_space = strchr( line, ' ' );
+        if( !first_space ) continue;
+        char* perm = first_space + 1;
+        char* second_space = strchr( perm, ' ' );
+        if( !second_space || second_space - perm != 4 ) continue;
+        result.emplace_back();
+        auto& mapping = result.back();
+        mapping.start_address = start_addr;
+        mapping.end_address = end_addr;
+        mapping.perm_r = perm[0] == 'r';
+        mapping.perm_w = perm[1] == 'w';
+        mapping.perm_x = perm[2] == 'x';
+    }
+    fclose( file );
+    return result;
+}
+
+// Internal implementation helper for LookUpMapping(address).
+//
+// Takes as input an `address` and a known vector `mappings`, assumed to be
+// sorted by increasing addresses, as /proc/self/maps seems to be.
+// Returns a pointer to the MappingInfo describing the mapping that this
+// address belongs to, or nullptr if the address isn't in `mappings`.
+static MappingInfo* LookUpMapping(std::vector<MappingInfo>& mappings, uintptr_t address)
+{
+    // Comparison function for std::lower_bound. Returns true if all addresses in `m1`
+    // are lower than `addr`.
+    auto Compare = []( const MappingInfo& m1, uintptr_t addr ) {
+        // '<=' because the address ranges are half-open intervals, [start, end).
+        return m1.end_address <= addr;
+    };
+    auto iter = std::lower_bound( mappings.begin(), mappings.end(), address, Compare );
+    if( iter == mappings.end() || iter->start_address > address) {
+        return nullptr;
+    }
+    return &*iter;
+}
+
+// Internal implementation helper for EnsureReadable(address).
+//
+// Takes as input an `address` and returns a pointer to a MappingInfo
+// describing the mapping that this address belongs to, or nullptr if
+// the address isn't in any known mapping.
+//
+// This function is stateful and not reentrant (assumes to be called from
+// only one thread). It holds a vector of mappings parsed from /proc/self/maps.
+//
+// Attempts to react to mappings changes by re-parsing /proc/self/maps.
+static MappingInfo* LookUpMapping(uintptr_t address)
+{
+    // Static state managed by this function. Not constant, we mutate that state as
+    // we turn some mappings readable. Initially parsed once here, updated as needed below.
+    static std::vector<MappingInfo> s_mappings = ParseMappings();
+    MappingInfo* mapping = LookUpMapping( s_mappings, address );
+    if( mapping ) return mapping;
+
+    // This address isn't in any known mapping. Try parsing again, maybe
+    // mappings changed.
+    s_mappings = ParseMappings();
+    return LookUpMapping( s_mappings, address );
+}
+
+// Internal implementation helper for EnsureReadable(address).
+//
+// Attempts to make the specified `mapping` readable if it isn't already.
+// Returns true if and only if the mapping is readable.
+static bool EnsureReadable( MappingInfo& mapping )
+{
+    if( mapping.perm_r )
+    {
+        // The mapping is already readable.
+        return true;
+    }
+    int prot = PROT_READ;
+    if( mapping.perm_w ) prot |= PROT_WRITE;
+    if( mapping.perm_x ) prot |= PROT_EXEC;
+    if( mprotect( reinterpret_cast<void*>( mapping.start_address ),
+                  mapping.end_address - mapping.start_address, prot ) == -1 )
+    {
+        // Failed to make the mapping readable. Shouldn't happen, hasn't
+        // been observed yet. If it happened in practice, we should consider
+        // adding a bool to MappingInfo to track this to avoid retrying mprotect
+        // everytime on such mappings.
+        return false;
+    }
+    // The mapping is now readable. Update `mapping` so the next call will be fast.
+    mapping.perm_r = true;
+    return true;
+}
+
+// Attempts to set the read permission on the entire mapping containing the
+// specified address. Returns true if and only if the mapping is now readable.
+static bool EnsureReadable( uintptr_t address )
+{
+    MappingInfo* mapping = LookUpMapping(address);
+    return mapping && EnsureReadable( *mapping );
+}
+
+#endif  // defined __ANDROID__
+
 void Profiler::HandleSymbolQuery( uint64_t symbol )
 {
 #ifdef TRACY_HAS_CALLSTACK
+#ifdef __ANDROID__
+    // On Android it's common for code to be in mappings that are only executable
+    // but not readable.
+    if( !EnsureReadable( symbol ) )
+    {
+        return;
+    }
+#endif
     const auto sym = DecodeSymbolAddress( symbol );
 
     SendSingleString( sym.file );
@@ -2889,6 +3068,14 @@ void Profiler::HandleSymbolQuery( uint64_t symbol )
 
 void Profiler::HandleSymbolCodeQuery( uint64_t symbol, uint32_t size )
 {
+#ifdef __ANDROID__
+    // On Android it's common for code to be in mappings that are only executable
+    // but not readable.
+    if( !EnsureReadable( symbol ) )
+    {
+        return;
+    }
+#endif
     SendLongString( symbol, (const char*)symbol, size, QueueType::SymbolCode );
 }
 
@@ -2972,14 +3159,13 @@ TRACY_API TracyCZoneCtx ___tracy_emit_zone_begin_callstack( const struct ___trac
         TracyLfqCommitC;
     }
 #endif
+    tracy::GetProfiler().SendCallstack( depth );
     {
         TracyLfqPrepareC( tracy::QueueType::ZoneBeginCallstack );
         tracy::MemWrite( &item->zoneBegin.time, tracy::Profiler::GetTime() );
         tracy::MemWrite( &item->zoneBegin.srcloc, (uint64_t)srcloc );
         TracyLfqCommitC;
     }
-
-    tracy::GetProfiler().SendCallstack( depth );
     return ctx;
 }
 
@@ -3038,14 +3224,13 @@ TRACY_API TracyCZoneCtx ___tracy_emit_zone_begin_alloc_callstack( uint64_t srclo
         TracyLfqCommitC;
     }
 #endif
+    tracy::GetProfiler().SendCallstack( depth );
     {
         TracyLfqPrepareC( tracy::QueueType::ZoneBeginAllocSrcLocCallstack );
         tracy::MemWrite( &item->zoneBegin.time, tracy::Profiler::GetTime() );
         tracy::MemWrite( &item->zoneBegin.srcloc, srcloc );
         TracyLfqCommitC;
     }
-
-    tracy::GetProfiler().SendCallstack( depth );
     return ctx;
 }
 
@@ -3108,6 +3293,24 @@ TRACY_API void ___tracy_emit_zone_name( TracyCZoneCtx ctx, const char* txt, size
     }
 }
 
+TRACY_API void ___tracy_emit_zone_color( TracyCZoneCtx ctx, uint32_t color ) {
+    if( !ctx.active ) return;
+#ifndef TRACY_NO_VERIFY
+    {
+        TracyLfqPrepareC( tracy::QueueType::ZoneValidation );
+        tracy::MemWrite( &item->zoneValidation.id, ctx.id );
+        TracyLfqCommitC;
+    }
+#endif
+    {
+        TracyLfqPrepareC( tracy::QueueType::ZoneColor );
+        tracy::MemWrite( &item->zoneColor.r, uint8_t( ( color       ) & 0xFF ) );
+        tracy::MemWrite( &item->zoneColor.g, uint8_t( ( color >> 8  ) & 0xFF ) );
+        tracy::MemWrite( &item->zoneColor.b, uint8_t( ( color >> 16 ) & 0xFF ) );
+        TracyLfqCommitC;
+    }
+}
+
 TRACY_API void ___tracy_emit_zone_value( TracyCZoneCtx ctx, uint64_t value )
 {
     if( !ctx.active ) return;
@@ -3129,6 +3332,10 @@ TRACY_API void ___tracy_emit_memory_alloc( const void* ptr, size_t size, int sec
 TRACY_API void ___tracy_emit_memory_alloc_callstack( const void* ptr, size_t size, int depth, int secure ) { tracy::Profiler::MemAllocCallstack( ptr, size, depth, secure != 0 ); }
 TRACY_API void ___tracy_emit_memory_free( const void* ptr, int secure ) { tracy::Profiler::MemFree( ptr, secure != 0 ); }
 TRACY_API void ___tracy_emit_memory_free_callstack( const void* ptr, int depth, int secure ) { tracy::Profiler::MemFreeCallstack( ptr, depth, secure != 0 ); }
+TRACY_API void ___tracy_emit_memory_alloc_named( const void* ptr, size_t size, int secure, const char* name ) { tracy::Profiler::MemAllocNamed( ptr, size, secure != 0, name ); }
+TRACY_API void ___tracy_emit_memory_alloc_callstack_named( const void* ptr, size_t size, int depth, int secure, const char* name ) { tracy::Profiler::MemAllocCallstackNamed( ptr, size, depth, secure != 0, name ); }
+TRACY_API void ___tracy_emit_memory_free_named( const void* ptr, int secure, const char* name ) { tracy::Profiler::MemFreeNamed( ptr, secure != 0, name ); }
+TRACY_API void ___tracy_emit_memory_free_callstack_named( const void* ptr, int depth, int secure, const char* name ) { tracy::Profiler::MemFreeCallstackNamed( ptr, depth, secure != 0, name ); }
 TRACY_API void ___tracy_emit_frame_mark( const char* name ) { tracy::Profiler::SendFrameMark( name ); }
 TRACY_API void ___tracy_emit_frame_mark_start( const char* name ) { tracy::Profiler::SendFrameMark( name, tracy::QueueType::FrameMarkMsgStart ); }
 TRACY_API void ___tracy_emit_frame_mark_end( const char* name ) { tracy::Profiler::SendFrameMark( name, tracy::QueueType::FrameMarkMsgEnd ); }
