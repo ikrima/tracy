@@ -10,6 +10,7 @@
 #include <string>
 #include <string.h>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "../common/TracyForceInline.hpp"
@@ -394,7 +395,7 @@ public:
     };
 
     Worker( const char* addr, uint16_t port );
-    Worker( const std::string& program, const std::vector<ImportEventTimeline>& timeline, const std::vector<ImportEventMessages>& messages, const std::vector<ImportEventPlots>& plots );
+    Worker( const char* name, const char* program, const std::vector<ImportEventTimeline>& timeline, const std::vector<ImportEventMessages>& messages, const std::vector<ImportEventPlots>& plots, const std::unordered_map<uint64_t, std::string>& threadNames );
     Worker( FileRead& f, EventType::Type eventMask = EventType::All, bool bgTasks = true );
     ~Worker();
 
@@ -635,6 +636,8 @@ private:
     tracy_force_inline void ProcessGpuNewContext( const QueueGpuNewContext& ev );
     tracy_force_inline void ProcessGpuZoneBegin( const QueueGpuZoneBegin& ev, bool serial );
     tracy_force_inline void ProcessGpuZoneBeginCallstack( const QueueGpuZoneBegin& ev, bool serial );
+    tracy_force_inline void ProcessGpuZoneBeginAllocSrcLoc( const QueueGpuZoneBeginLean& ev, bool serial );
+    tracy_force_inline void ProcessGpuZoneBeginAllocSrcLocCallstack( const QueueGpuZoneBeginLean& ev, bool serial );
     tracy_force_inline void ProcessGpuZoneEnd( const QueueGpuZoneEnd& ev, bool serial );
     tracy_force_inline void ProcessGpuTime( const QueueGpuTime& ev );
     tracy_force_inline void ProcessGpuCalibration( const QueueGpuCalibration& ev );
@@ -646,7 +649,7 @@ private:
     tracy_force_inline void ProcessMemAllocCallstackNamed( const QueueMemAlloc& ev );
     tracy_force_inline void ProcessMemFreeCallstack( const QueueMemFree& ev );
     tracy_force_inline void ProcessMemFreeCallstackNamed( const QueueMemFree& ev );
-    tracy_force_inline void ProcessCallstackMemory();
+    tracy_force_inline void ProcessCallstackSerial();
     tracy_force_inline void ProcessCallstack();
     tracy_force_inline void ProcessCallstackSample( const QueueCallstackSample& ev );
     tracy_force_inline void ProcessCallstackFrameSize( const QueueCallstackFrameSize& ev );
@@ -666,6 +669,8 @@ private:
     tracy_force_inline void ProcessZoneBeginImpl( ZoneEvent* zone, const QueueZoneBegin& ev );
     tracy_force_inline void ProcessZoneBeginAllocSrcLocImpl( ZoneEvent* zone, const QueueZoneBeginLean& ev );
     tracy_force_inline void ProcessGpuZoneBeginImpl( GpuEvent* zone, const QueueGpuZoneBegin& ev, bool serial );
+    tracy_force_inline void ProcessGpuZoneBeginAllocSrcLocImpl( GpuEvent* zone, const QueueGpuZoneBeginLean& ev, bool serial );
+    tracy_force_inline void ProcessGpuZoneBeginImplCommon( GpuEvent* zone, const QueueGpuZoneBeginLean& ev, bool serial );
     tracy_force_inline MemEvent* ProcessMemAllocImpl( uint64_t memname, MemData& memdata, const QueueMemAlloc& ev );
     tracy_force_inline MemEvent* ProcessMemFreeImpl( uint64_t memname, MemData& memdata, const QueueMemFree& ev );
 
@@ -876,7 +881,7 @@ private:
     uint64_t m_callstackAllocNextIdx = 0;
     uint64_t m_callstackParentNextIdx = 0;
 
-    uint32_t m_memNextCallstack = 0;
+    uint32_t m_serialNextCallstack = 0;
     uint64_t m_memNamePayload = 0;
 
     Slab<64*1024*1024> m_slab;

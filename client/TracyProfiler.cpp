@@ -1358,7 +1358,12 @@ void Profiler::Worker()
 #ifndef TRACY_NO_BROADCAST
     m_broadcast = (UdpBroadcast*)tracy_malloc( sizeof( UdpBroadcast ) );
     new(m_broadcast) UdpBroadcast();
-    if( !m_broadcast->Open( "255.255.255.255", broadcastPort ) )
+#  ifdef TRACY_ONLY_LOCALHOST
+    const char* addr = "127.255.255.255";
+#  else
+    const char* addr = "255.255.255.255";
+#  endif
+    if( !m_broadcast->Open( addr, broadcastPort ) )
     {
         m_broadcast->~UdpBroadcast();
         tracy_free( m_broadcast );
@@ -1766,7 +1771,14 @@ static void FreeAssociatedMemory( const QueueItem& item )
         ptr = MemRead<uint64_t>( &item.zoneBegin.srcloc );
         tracy_free( (void*)ptr );
         break;
-    case QueueType::CallstackMemory:
+    case QueueType::GpuZoneBeginAllocSrcLoc:
+    case QueueType::GpuZoneBeginAllocSrcLocCallstack:
+    case QueueType::GpuZoneBeginAllocSrcLocSerial:
+    case QueueType::GpuZoneBeginAllocSrcLocCallstackSerial:
+        ptr = MemRead<uint64_t>( &item.gpuZoneBegin.srcloc );
+        tracy_free( (void*)ptr );
+        break;
+    case QueueType::CallstackSerial:
     case QueueType::Callstack:
         ptr = MemRead<uint64_t>( &item.callstackFat.ptr );
         tracy_free( (void*)ptr );
@@ -1971,6 +1983,18 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                         MemWrite( &item->gpuZoneBegin.cpuTime, dt );
                         break;
                     }
+                    case QueueType::GpuZoneBeginAllocSrcLoc:
+                    case QueueType::GpuZoneBeginAllocSrcLocCallstack:
+                    {
+                        int64_t t = MemRead<int64_t>( &item->gpuZoneBegin.cpuTime );
+                        int64_t dt = t - refThread;
+                        refThread = t;
+                        MemWrite( &item->gpuZoneBegin.cpuTime, dt );
+                        ptr = MemRead<uint64_t>( &item->gpuZoneBegin.srcloc );
+                        SendSourceLocationPayload( ptr );
+                        tracy_free( (void*)ptr );
+                        break;
+                    }
                     case QueueType::GpuZoneEnd:
                     {
                         int64_t t = MemRead<int64_t>( &item->gpuZoneEnd.cpuTime );
@@ -2128,7 +2152,7 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
             {
                 switch( (QueueType)idx )
                 {
-                case QueueType::CallstackMemory:
+                case QueueType::CallstackSerial:
                     ptr = MemRead<uint64_t>( &item->callstackFat.ptr );
                     SendCallstackPayload( ptr );
                     tracy_free( (void*)ptr );
@@ -2199,6 +2223,18 @@ Profiler::DequeueStatus Profiler::DequeueSerial()
                     int64_t dt = t - refSerial;
                     refSerial = t;
                     MemWrite( &item->gpuZoneBegin.cpuTime, dt );
+                    break;
+                }
+                case QueueType::GpuZoneBeginAllocSrcLocSerial:
+                case QueueType::GpuZoneBeginAllocSrcLocCallstackSerial:
+                {
+                    int64_t t = MemRead<int64_t>( &item->gpuZoneBegin.cpuTime );
+                    int64_t dt = t - refSerial;
+                    refSerial = t;
+                    MemWrite( &item->gpuZoneBegin.cpuTime, dt );
+                    ptr = MemRead<uint64_t>( &item->gpuZoneBegin.srcloc );
+                    SendSourceLocationPayload( ptr );
+                    tracy_free( (void*)ptr );
                     break;
                 }
                 case QueueType::GpuZoneEndSerial:

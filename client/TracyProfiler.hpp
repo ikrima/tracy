@@ -177,6 +177,14 @@ public:
         return p.m_serialQueue.prepare_next();
     }
 
+    static tracy_force_inline QueueItem* QueueSerialCallstack( void* ptr )
+    {
+        auto& p = GetProfiler();
+        p.m_serialLock.lock();
+        p.SendCallstackSerial( ptr );
+        return p.m_serialQueue.prepare_next();
+    }
+
     static tracy_force_inline void QueueSerialFinish()
     {
         auto& p = GetProfiler();
@@ -407,7 +415,7 @@ public:
         auto callstack = Callstack( depth );
 
         profiler.m_serialLock.lock();
-        SendCallstackMemory( callstack );
+        SendCallstackSerial( callstack );
         SendMemAlloc( QueueType::MemAllocCallstack, thread, ptr, size );
         profiler.m_serialLock.unlock();
 #else
@@ -429,7 +437,7 @@ public:
         auto callstack = Callstack( depth );
 
         profiler.m_serialLock.lock();
-        SendCallstackMemory( callstack );
+        SendCallstackSerial( callstack );
         SendMemFree( QueueType::MemFreeCallstack, thread, ptr );
         profiler.m_serialLock.unlock();
 #else
@@ -479,7 +487,7 @@ public:
         auto callstack = Callstack( depth );
 
         profiler.m_serialLock.lock();
-        SendCallstackMemory( callstack );
+        SendCallstackSerial( callstack );
         SendMemName( name );
         SendMemAlloc( QueueType::MemAllocCallstackNamed, thread, ptr, size );
         profiler.m_serialLock.unlock();
@@ -502,7 +510,7 @@ public:
         auto callstack = Callstack( depth );
 
         profiler.m_serialLock.lock();
-        SendCallstackMemory( callstack );
+        SendCallstackSerial( callstack );
         SendMemName( name );
         SendMemFree( QueueType::MemFreeCallstackNamed, thread, ptr );
         profiler.m_serialLock.unlock();
@@ -678,11 +686,11 @@ private:
     void CalibrateDelay();
     void ReportTopology();
 
-    static tracy_force_inline void SendCallstackMemory( void* ptr )
+    static tracy_force_inline void SendCallstackSerial( void* ptr )
     {
 #ifdef TRACY_HAS_CALLSTACK
         auto item = GetProfiler().m_serialQueue.prepare_next();
-        MemWrite( &item->hdr.type, QueueType::CallstackMemory );
+        MemWrite( &item->hdr.type, QueueType::CallstackSerial );
         MemWrite( &item->callstackFat.ptr, (uint64_t)ptr );
         GetProfiler().m_serialQueue.commit_next();
 #endif

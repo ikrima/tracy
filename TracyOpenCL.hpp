@@ -125,7 +125,8 @@ namespace tracy {
                 if (eventInfo.phase == EventPhase::End)
                 {
                     // Done with the event, so release it
-                    assert(clReleaseEvent(event) == CL_SUCCESS);
+                    err = clReleaseEvent(event);
+                    assert(err == CL_SUCCESS);
                 }
 
                 m_tail = (m_tail + 1) % QueryCount;
@@ -260,13 +261,16 @@ namespace tracy {
 
         tracy_force_inline void SetEvent(cl_event event)
         {
+            if (!m_active) return;
             m_event = event;
-            assert(clRetainEvent(m_event) == CL_SUCCESS);
+            cl_int err = clRetainEvent(m_event);
+            assert(err == CL_SUCCESS);
             m_ctx->GetQuery(m_beginQueryId).event = m_event;
         }
 
         tracy_force_inline ~OpenCLCtxScope()
         {
+            if (!m_active) return;
             const auto queryId = m_ctx->NextQueryId(EventInfo{ m_event, EventPhase::End });
 
             auto item = Profiler::QueueSerial();

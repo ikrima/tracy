@@ -275,10 +275,11 @@ Worker::Worker( const char* addr, uint16_t port )
     m_threadNet = std::thread( [this] { SetThreadName( "Tracy Network" ); Network(); } );
 }
 
-Worker::Worker( const std::string& program, const std::vector<ImportEventTimeline>& timeline, const std::vector<ImportEventMessages>& messages, const std::vector<ImportEventPlots>& plots )
+Worker::Worker( const char* name, const char* program, const std::vector<ImportEventTimeline>& timeline, const std::vector<ImportEventMessages>& messages, const std::vector<ImportEventPlots>& plots, const std::unordered_map<uint64_t, std::string>& threadNames )
     : m_hasData( true )
     , m_delay( 0 )
     , m_resolution( 0 )
+    , m_captureName( name )
     , m_captureProgram( program )
     , m_captureTime( 0 )
     , m_pid( 0 )
@@ -428,9 +429,19 @@ Worker::Worker( const std::string& program, const std::vector<ImportEventTimelin
 
     for( auto& t : m_threadMap )
     {
-        char buf[64];
-        sprintf( buf, "%" PRIu64, t.first );
-        AddThreadString( t.first, buf, strlen( buf ) );
+        auto name = threadNames.find(t.first);
+        if (name != threadNames.end())
+        {
+            char buf[128];
+            int len = snprintf(buf, sizeof(buf), "(%" PRIu64 ") %s", t.first, name->second.c_str());
+            AddThreadString(t.first, buf, len);
+        }
+        else
+        {
+            char buf[64];
+            sprintf( buf, "%" PRIu64, t.first );
+            AddThreadString( t.first, buf, strlen( buf ) );
+        }
     }
 
     m_data.framesBase = m_data.frames.Retrieve( 0, [this] ( uint64_t name ) {
@@ -512,6 +523,8 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
         char tmp[1024];
         f.Read( tmp, sz );
         m_captureName = std::string( tmp, tmp+sz );
+        if (m_captureName.empty())
+            m_captureName = f.GetFilename();
     }
     {
         f.Read( sz );
@@ -4206,6 +4219,12 @@ bool Worker::Process( const QueueItem& ev )
     case QueueType::GpuZoneBeginCallstack:
         ProcessGpuZoneBeginCallstack( ev.gpuZoneBegin, false );
         break;
+    case QueueType::GpuZoneBeginAllocSrcLoc:
+        ProcessGpuZoneBeginAllocSrcLoc( ev.gpuZoneBeginLean, false );
+        break;
+    case QueueType::GpuZoneBeginAllocSrcLocCallstack:
+        ProcessGpuZoneBeginAllocSrcLocCallstack( ev.gpuZoneBeginLean, false );
+        break;
     case QueueType::GpuZoneEnd:
         ProcessGpuZoneEnd( ev.gpuZoneEnd, false );
         break;
@@ -4214,6 +4233,12 @@ bool Worker::Process( const QueueItem& ev )
         break;
     case QueueType::GpuZoneBeginCallstackSerial:
         ProcessGpuZoneBeginCallstack( ev.gpuZoneBegin, true );
+        break;
+    case QueueType::GpuZoneBeginAllocSrcLocSerial:
+        ProcessGpuZoneBeginAllocSrcLoc( ev.gpuZoneBeginLean, true );
+        break;
+    case QueueType::GpuZoneBeginAllocSrcLocCallstackSerial:
+        ProcessGpuZoneBeginAllocSrcLocCallstack( ev.gpuZoneBeginLean, true );
         break;
     case QueueType::GpuZoneEndSerial:
         ProcessGpuZoneEnd( ev.gpuZoneEnd, true );
@@ -4248,8 +4273,8 @@ bool Worker::Process( const QueueItem& ev )
     case QueueType::MemFreeCallstackNamed:
         ProcessMemFreeCallstackNamed( ev.memFree );
         break;
-    case QueueType::CallstackMemory:
-        ProcessCallstackMemory();
+    case QueueType::CallstackSerial:
+        ProcessCallstackSerial();
         break;
     case QueueType::Callstack:
     case QueueType::CallstackAlloc:
@@ -4342,6 +4367,24 @@ void Worker::ProcessZoneBeginImpl( ZoneEvent* zone, const QueueZoneBegin& ev )
     NewZone( zone, m_threadCtx );
 }
 
+void Worker::ProcessZoneBeginAllocSrcLocImpl( ZoneEvent* zone, const QueueZoneBeginLean& ev )
+{
+    assert( m_pendingSourceLocationPayload != 0 );
+
+    const auto refTime = m_refTimeThread + ev.time;
+    m_refTimeThread = refTime;
+    const auto start = TscTime( refTime - m_data.baseTime );
+    zone->SetStartSrcLoc( start, m_pendingSourceLocationPayload );
+    zone->SetEnd( -1 );
+    zone->SetChild( -1 );
+
+    if( m_data.lastTime < start ) m_data.lastTime = start;
+
+    NewZone( zone, m_threadCtx );
+
+    m_pendingSourceLocationPayload = 0;
+}
+
 ZoneEvent* Worker::AllocZoneEvent()
 {
     ZoneEvent* ret;
@@ -4376,24 +4419,6 @@ void Worker::ProcessZoneBeginCallstack( const QueueZoneBegin& ev )
     auto& extra = RequestZoneExtra( *zone );
     extra.callstack.SetVal( it->second );
     it->second = 0;
-}
-
-void Worker::ProcessZoneBeginAllocSrcLocImpl( ZoneEvent* zone, const QueueZoneBeginLean& ev )
-{
-    assert( m_pendingSourceLocationPayload != 0 );
-
-    const auto refTime = m_refTimeThread + ev.time;
-    m_refTimeThread = refTime;
-    const auto start = TscTime( refTime - m_data.baseTime );
-    zone->SetStartSrcLoc( start, m_pendingSourceLocationPayload );
-    zone->SetEnd( -1 );
-    zone->SetChild( -1 );
-
-    if( m_data.lastTime < start ) m_data.lastTime = start;
-
-    NewZone( zone, m_threadCtx );
-
-    m_pendingSourceLocationPayload = 0;
 }
 
 void Worker::ProcessZoneBeginAllocSrcLoc( const QueueZoneBeginLean& ev )
@@ -4537,7 +4562,7 @@ void Worker::MemFreeFailure( uint64_t thread )
 {
     m_failure = Failure::MemFree;
     m_failureData.thread = thread;
-    m_failureData.callstack = m_memNextCallstack;
+    m_failureData.callstack = m_serialNextCallstack;
 }
 
 void Worker::FrameEndFailure()
@@ -5173,12 +5198,25 @@ void Worker::ProcessGpuNewContext( const QueueGpuNewContext& ev )
 
 void Worker::ProcessGpuZoneBeginImpl( GpuEvent* zone, const QueueGpuZoneBegin& ev, bool serial )
 {
+    CheckSourceLocation( ev.srcloc );
+    zone->SetSrcLoc( ShrinkSourceLocation( ev.srcloc ) );
+    ProcessGpuZoneBeginImplCommon( zone, ev, serial );
+}
+
+void Worker::ProcessGpuZoneBeginAllocSrcLocImpl( GpuEvent* zone, const QueueGpuZoneBeginLean& ev, bool serial )
+{
+    assert( m_pendingSourceLocationPayload != 0 );
+    zone->SetSrcLoc( m_pendingSourceLocationPayload );
+    ProcessGpuZoneBeginImplCommon( zone, ev, serial );
+    m_pendingSourceLocationPayload = 0;
+}
+
+void Worker::ProcessGpuZoneBeginImplCommon( GpuEvent* zone, const QueueGpuZoneBeginLean& ev, bool serial )
+{
     m_data.gpuCnt++;
 
-    auto ctx = m_gpuCtxMap[ev.context];
+    auto ctx = m_gpuCtxMap[ev.context].get();
     assert( ctx );
-
-    CheckSourceLocation( ev.srcloc );
 
     int64_t cpuTime;
     if( serial )
@@ -5196,7 +5234,6 @@ void Worker::ProcessGpuZoneBeginImpl( GpuEvent* zone, const QueueGpuZoneBegin& e
     zone->SetCpuEnd( -1 );
     zone->SetGpuStart( -1 );
     zone->SetGpuEnd( -1 );
-    zone->SetSrcLoc( ShrinkSourceLocation( ev.srcloc ) );
     zone->callstack.SetVal( 0 );
     zone->SetChild( -1 );
 
@@ -5252,10 +5289,44 @@ void Worker::ProcessGpuZoneBeginCallstack( const QueueGpuZoneBegin& ev, bool ser
 {
     auto zone = m_slab.Alloc<GpuEvent>();
     ProcessGpuZoneBeginImpl( zone, ev, serial );
-    auto it = m_nextCallstack.find( m_threadCtx );
-    assert( it != m_nextCallstack.end() );
-    zone->callstack.SetVal( it->second );
-    it->second = 0;
+    if( serial )
+    {
+        assert( m_serialNextCallstack != 0 );
+        zone->callstack.SetVal( m_serialNextCallstack );
+        m_serialNextCallstack = 0;
+    }
+    else
+    {
+        auto it = m_nextCallstack.find( m_threadCtx );
+        assert( it != m_nextCallstack.end() );
+        zone->callstack.SetVal( it->second );
+        it->second = 0;
+    }
+}
+
+void Worker::ProcessGpuZoneBeginAllocSrcLoc( const QueueGpuZoneBeginLean& ev, bool serial )
+{
+    auto zone = m_slab.Alloc<GpuEvent>();
+    ProcessGpuZoneBeginAllocSrcLocImpl( zone, ev, serial );
+}
+
+void Worker::ProcessGpuZoneBeginAllocSrcLocCallstack( const QueueGpuZoneBeginLean& ev, bool serial )
+{
+    auto zone = m_slab.Alloc<GpuEvent>();
+    ProcessGpuZoneBeginAllocSrcLocImpl( zone, ev, serial );
+    if( serial )
+    {
+        assert( m_serialNextCallstack != 0 );
+        zone->callstack.SetVal( m_serialNextCallstack );
+        m_serialNextCallstack = 0;
+    }
+    else
+    {
+        auto it = m_nextCallstack.find( m_threadCtx );
+        assert( it != m_nextCallstack.end() );
+        zone->callstack.SetVal( it->second );
+        it->second = 0;
+    }
 }
 
 void Worker::ProcessGpuZoneEnd( const QueueGpuZoneEnd& ev, bool serial )
@@ -5485,9 +5556,9 @@ void Worker::ProcessMemAllocCallstack( const QueueMemAlloc& ev )
 {
     auto mem = ProcessMemAlloc( ev );
     assert( mem );
-    assert( m_memNextCallstack != 0 );
-    mem->SetCsAlloc( m_memNextCallstack );
-    m_memNextCallstack = 0;
+    assert( m_serialNextCallstack != 0 );
+    mem->SetCsAlloc( m_serialNextCallstack );
+    m_serialNextCallstack = 0;
 }
 
 void Worker::ProcessMemAllocCallstackNamed( const QueueMemAlloc& ev )
@@ -5504,17 +5575,17 @@ void Worker::ProcessMemAllocCallstackNamed( const QueueMemAlloc& ev )
     }
     auto mem = ProcessMemAllocImpl( memname, *it->second, ev );
     assert( mem );
-    assert( m_memNextCallstack != 0 );
-    mem->SetCsAlloc( m_memNextCallstack );
-    m_memNextCallstack = 0;
+    assert( m_serialNextCallstack != 0 );
+    mem->SetCsAlloc( m_serialNextCallstack );
+    m_serialNextCallstack = 0;
 }
 
 void Worker::ProcessMemFreeCallstack( const QueueMemFree& ev )
 {
     auto mem = ProcessMemFree( ev );
-    assert( m_memNextCallstack != 0 );
-    if( mem ) mem->csFree.SetVal( m_memNextCallstack );
-    m_memNextCallstack = 0;
+    assert( m_serialNextCallstack != 0 );
+    if( mem ) mem->csFree.SetVal( m_serialNextCallstack );
+    m_serialNextCallstack = 0;
 }
 
 void Worker::ProcessMemFreeCallstackNamed( const QueueMemFree& ev )
@@ -5530,16 +5601,16 @@ void Worker::ProcessMemFreeCallstackNamed( const QueueMemFree& ev )
         it->second->name = memname;
     }
     auto mem = ProcessMemFreeImpl( memname, *it->second, ev );
-    assert( m_memNextCallstack != 0 );
-    if( mem ) mem->csFree.SetVal( m_memNextCallstack );
-    m_memNextCallstack = 0;
+    assert( m_serialNextCallstack != 0 );
+    if( mem ) mem->csFree.SetVal( m_serialNextCallstack );
+    m_serialNextCallstack = 0;
 }
 
-void Worker::ProcessCallstackMemory()
+void Worker::ProcessCallstackSerial()
 {
     assert( m_pendingCallstackId != 0 );
-    assert( m_memNextCallstack == 0 );
-    m_memNextCallstack = m_pendingCallstackId;
+    assert( m_serialNextCallstack == 0 );
+    m_serialNextCallstack = m_pendingCallstackId;
     m_pendingCallstackId = 0;
 }
 
