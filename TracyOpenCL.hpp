@@ -5,6 +5,7 @@
 
 #define TracyCLContext(c, x) nullptr
 #define TracyCLDestroy(c)
+#define TracyCLContextName(c, x, y)
 
 #define TracyCLNamedZone(c, x, y, z)
 #define TracyCLNamedZoneC(c, x, y, z, w)
@@ -64,15 +65,40 @@ namespace tracy {
             , m_head(0)
             , m_tail(0)
         {
+            int64_t tcpu, tgpu;
             assert(m_contextId != 255);
 
-            m_hostStartTime = Profiler::GetTime();
-            m_deviceStartTime = GetDeviceTimestamp(context, device);
+            cl_int err = CL_SUCCESS;
+            cl_command_queue queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &err);
+            assert(err == CL_SUCCESS);
+            uint32_t dummyValue = 42;
+            cl_mem dummyBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(uint32_t), nullptr, &err);
+            assert(err == CL_SUCCESS);
+            cl_event writeBufferEvent;
+            err = clEnqueueWriteBuffer(queue, dummyBuffer, CL_FALSE, 0, sizeof(uint32_t), &dummyValue, 0, nullptr, &writeBufferEvent);
+            assert(err == CL_SUCCESS);
+            err = clWaitForEvents(1, &writeBufferEvent);
+
+            tcpu = Profiler::GetTime();
+
+            assert(err == CL_SUCCESS);
+            cl_int eventStatus;
+            err = clGetEventInfo(writeBufferEvent, CL_EVENT_COMMAND_EXECUTION_STATUS, sizeof(cl_int), &eventStatus, nullptr);
+            assert(err == CL_SUCCESS);
+            assert(eventStatus == CL_COMPLETE);
+            err = clGetEventProfilingInfo(writeBufferEvent, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &tgpu, nullptr);
+            assert(err == CL_SUCCESS);
+            err = clReleaseEvent(writeBufferEvent);
+            assert(err == CL_SUCCESS);
+            err = clReleaseMemObject(dummyBuffer);
+            assert(err == CL_SUCCESS);
+            err = clReleaseCommandQueue(queue);
+            assert(err == CL_SUCCESS);
 
             auto item = Profiler::QueueSerial();
             MemWrite(&item->hdr.type, QueueType::GpuNewContext);
-            MemWrite(&item->gpuNewContext.cpuTime, m_hostStartTime);
-            MemWrite(&item->gpuNewContext.gpuTime, m_hostStartTime);
+            MemWrite(&item->gpuNewContext.cpuTime, tcpu);
+            MemWrite(&item->gpuNewContext.gpuTime, tgpu);
             memset(&item->gpuNewContext.thread, 0, sizeof(item->gpuNewContext.thread));
             MemWrite(&item->gpuNewContext.period, 1.0f);
             MemWrite(&item->gpuNewContext.type, GpuContextType::OpenCL);
@@ -80,6 +106,22 @@ namespace tracy {
             MemWrite(&item->gpuNewContext.flags, (uint8_t)0);
 #ifdef TRACY_ON_DEMAND
             GetProfiler().DeferItem(*item);
+#endif
+            Profiler::QueueSerialFinish();
+        }
+
+        void Name( const char* name, uint16_t len )
+        {
+            auto ptr = (char*)tracy_malloc( len );
+            memcpy( ptr, name, len );
+
+            auto item = Profiler::QueueSerial();
+            MemWrite( &item->hdr.type, QueueType::GpuContextName );
+            MemWrite( &item->gpuContextNameFat.context, (uint8_t)m_contextId );
+            MemWrite( &item->gpuContextNameFat.ptr, (uint64_t)ptr );
+            MemWrite( &item->gpuContextNameFat.size, len );
+#ifdef TRACY_ON_DEMAND
+            GetProfiler().DeferItem( *item );
 #endif
             Profiler::QueueSerialFinish();
         }
@@ -117,7 +159,7 @@ namespace tracy {
 
                 auto item = Profiler::QueueSerial();
                 MemWrite(&item->hdr.type, QueueType::GpuTime);
-                MemWrite(&item->gpuTime.gpuTime, TimestampOffset(eventTimeStamp));
+                MemWrite(&item->gpuTime.gpuTime, (int64_t)eventTimeStamp);
                 MemWrite(&item->gpuTime.queryId, (uint16_t)m_tail);
                 MemWrite(&item->gpuTime.context, m_contextId);
                 Profiler::QueueSerialFinish();
@@ -154,50 +196,6 @@ namespace tracy {
         }
 
     private:
-        tracy_force_inline int64_t GetHostStartTime() const
-        {
-            return m_hostStartTime;
-        }
-
-        tracy_force_inline int64_t GetDeviceStartTime() const
-        {
-            return m_deviceStartTime;
-        }
-
-        tracy_force_inline int64_t TimestampOffset(int64_t deviceTimestamp) const
-        {
-            return m_hostStartTime + (deviceTimestamp - m_deviceStartTime);
-        }
-
-        tracy_force_inline int64_t GetDeviceTimestamp(cl_context context, cl_device_id device) const
-        {
-            cl_ulong deviceTimestamp = 0;
-            cl_int err = CL_SUCCESS;
-            cl_command_queue queue = clCreateCommandQueue(context, device, CL_QUEUE_PROFILING_ENABLE, &err);
-            assert(err == CL_SUCCESS);
-            uint32_t dummyValue = 42;
-            cl_mem dummyBuffer = clCreateBuffer(context, CL_MEM_WRITE_ONLY, sizeof(uint32_t), nullptr, &err);
-            assert(err == CL_SUCCESS);
-            cl_event writeBufferEvent;
-            err = clEnqueueWriteBuffer(queue, dummyBuffer, CL_TRUE, 0, sizeof(uint32_t), &dummyValue, 0, nullptr, &writeBufferEvent);
-            assert(err == CL_SUCCESS);
-            err = clWaitForEvents(1, &writeBufferEvent);
-            assert(err == CL_SUCCESS);
-            cl_int eventStatus;
-            err = clGetEventInfo(writeBufferEvent, CL_EVENT_COMMAND_EXECUTION_STATUS, sizeof(cl_int), &eventStatus, nullptr);
-            assert(err == CL_SUCCESS);
-            assert(eventStatus == CL_COMPLETE);
-            err = clGetEventProfilingInfo(writeBufferEvent, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &deviceTimestamp, nullptr);
-            assert(err == CL_SUCCESS);
-            err = clReleaseEvent(writeBufferEvent);
-            assert(err == CL_SUCCESS);
-            err = clReleaseMemObject(dummyBuffer);
-            assert(err == CL_SUCCESS);
-            err = clReleaseCommandQueue(queue);
-            assert(err == CL_SUCCESS);
-
-            return (int64_t)deviceTimestamp;
-        }
 
         unsigned int m_contextId;
 
@@ -205,8 +203,6 @@ namespace tracy {
         unsigned int m_head;
         unsigned int m_tail;
 
-        int64_t m_hostStartTime;
-        int64_t m_deviceStartTime;
     };
 
     class OpenCLCtxScope {
@@ -308,6 +304,7 @@ using TracyCLCtx = tracy::OpenCLCtx*;
 
 #define TracyCLContext(context, device) tracy::CreateCLContext(context, device);
 #define TracyCLDestroy(ctx) tracy::DestroyCLContext(ctx);
+#define TracyCLContextName(context, name, size) ctx->Name(name, size);
 #if defined TRACY_HAS_CALLSTACK && defined TRACY_CALLSTACK
 #  define TracyCLNamedZone(ctx, varname, name, active) static constexpr tracy::SourceLocationData TracyConcat(__tracy_gpu_source_location,__LINE__) { name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, 0 }; tracy::OpenCLCtxScope varname(ctx, &TracyConcat(__tracy_gpu_source_location,__LINE__), TRACY_CALLSTACK, active );
 #  define TracyCLNamedZoneC(ctx, varname, name, color, active) static constexpr tracy::SourceLocationData TracyConcat(__tracy_gpu_source_location,__LINE__) { name, __FUNCTION__, __FILE__, (uint32_t)__LINE__, color }; tracy::OpenCLCtxScope varname(ctx, &TracyConcat(__tracy_gpu_source_location,__LINE__), TRACY_CALLSTACK, active );

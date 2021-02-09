@@ -30,12 +30,12 @@ __pragma(warning(disable:4668))
 #  include <mach/mach_time.h>
 #endif
 
-#if defined _WIN32 || defined __CYGWIN__ || ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) || ( defined TARGET_OS_IOS && TARGET_OS_IOS == 1 )
+#if !defined TRACY_TIMER_FALLBACK && ( defined _WIN32 || defined __CYGWIN__ || ( defined __i386 || defined _M_IX86 || defined __x86_64__ || defined _M_X64 ) || ( defined TARGET_OS_IOS && TARGET_OS_IOS == 1 ) )
 #  define TRACY_HW_TIMER
 #endif
 
 #if !defined TRACY_HW_TIMER
-  #include <chrono>
+#  include <chrono>
 #endif
 
 #ifndef TracyConcat
@@ -297,7 +297,11 @@ public:
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 ) tracy::GetProfiler().SendCallstack( callstack );
+        if( callstack != 0 )
+        {
+            InitRPMallocThread();
+            tracy::GetProfiler().SendCallstack( callstack );
+        }
 
         TracyLfqPrepare( callstack == 0 ? QueueType::Message : QueueType::MessageCallstack );
         auto ptr = (char*)tracy_malloc( size );
@@ -313,7 +317,11 @@ public:
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 ) tracy::GetProfiler().SendCallstack( callstack );
+        if( callstack != 0 )
+        {
+            InitRPMallocThread();
+            tracy::GetProfiler().SendCallstack( callstack );
+        }
 
         TracyLfqPrepare( callstack == 0 ? QueueType::MessageLiteral : QueueType::MessageLiteralCallstack );
         MemWrite( &item->messageLiteral.time, GetTime() );
@@ -327,7 +335,11 @@ public:
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 ) tracy::GetProfiler().SendCallstack( callstack );
+        if( callstack != 0 )
+        {
+            InitRPMallocThread();
+            tracy::GetProfiler().SendCallstack( callstack );
+        }
 
         TracyLfqPrepare( callstack == 0 ? QueueType::MessageColor : QueueType::MessageColorCallstack );
         auto ptr = (char*)tracy_malloc( size );
@@ -346,7 +358,11 @@ public:
 #ifdef TRACY_ON_DEMAND
         if( !GetProfiler().IsConnected() ) return;
 #endif
-        if( callstack != 0 ) tracy::GetProfiler().SendCallstack( callstack );
+        if( callstack != 0 )
+        {
+            InitRPMallocThread();
+            tracy::GetProfiler().SendCallstack( callstack );
+        }
 
         TracyLfqPrepare( callstack == 0 ? QueueType::MessageLiteralColor : QueueType::MessageLiteralColorCallstack );
         MemWrite( &item->messageColorLiteral.time, GetTime() );
@@ -681,6 +697,7 @@ private:
     void HandleParameter( uint64_t payload );
     void HandleSymbolQuery( uint64_t symbol );
     void HandleSymbolCodeQuery( uint64_t symbol, uint32_t size );
+    void HandleSourceCodeQuery();
 
     void CalibrateTimer();
     void CalibrateDelay();
@@ -749,7 +766,7 @@ private:
     uint64_t m_delay;
     std::atomic<int64_t> m_timeBegin;
     uint64_t m_mainThread;
-    uint64_t m_epoch;
+    uint64_t m_epoch, m_exectime;
     std::atomic<bool> m_shutdown;
     std::atomic<bool> m_shutdownManual;
     std::atomic<bool> m_shutdownFinished;
@@ -798,6 +815,9 @@ private:
 #endif
 
     ParameterCallback m_paramCallback;
+
+    char* m_queryData;
+    char* m_queryDataPtr;
 };
 
 }

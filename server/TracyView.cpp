@@ -2921,11 +2921,23 @@ void View::DrawZones()
 
                 const bool isMultithreaded = (v->type == GpuContextType::Vulkan) || (v->type == GpuContextType::OpenCL) || (v->type == GpuContextType::Direct3D12);
 
+                float boxwidth;
                 char buf[64];
                 sprintf( buf, "%s context %zu", GpuContextNames[(int)v->type], i );
-                DrawTextContrast( draw, wpos + ImVec2( ty, oldOffset ), showFull ? 0xFFFFAAAA : 0xFF886666, buf );
+                if( v->name.Active() )
+                {
+                    char tmp[4096];
+                    sprintf( tmp, "%s: %s", buf, m_worker.GetString( v->name ) );
+                    DrawTextContrast( draw, wpos + ImVec2( ty, oldOffset ), showFull ? 0xFFFFAAAA : 0xFF886666, tmp );
+                    boxwidth = ImGui::CalcTextSize( tmp ).x;
+                }
+                else
+                {
+                    DrawTextContrast( draw, wpos + ImVec2( ty, oldOffset ), showFull ? 0xFFFFAAAA : 0xFF886666, buf );
+                    boxwidth = ImGui::CalcTextSize( buf ).x;
+                }
 
-                if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, oldOffset ), wpos + ImVec2( ty + ImGui::CalcTextSize( buf ).x, oldOffset + ty ) ) )
+                if( hover && ImGui::IsMouseHoveringRect( wpos + ImVec2( 0, oldOffset ), wpos + ImVec2( ty + boxwidth, oldOffset + ty ) ) )
                 {
                     if( IsMouseClicked( 0 ) )
                     {
@@ -2961,6 +2973,7 @@ void View::DrawZones()
 
                     ImGui::BeginTooltip();
                     ImGui::TextUnformatted( buf );
+                    if( v->name.Active() ) TextFocused( "Name:", m_worker.GetString( v->name ) );
                     ImGui::Separator();
                     if( !isMultithreaded )
                     {
@@ -4123,6 +4136,7 @@ int View::DrawGhostLevel( const Vector<GhostZone>& vec, bool hover, double pxns,
                 draw->AddRectFilled( wpos + ImVec2( px0, offset ), wpos + ImVec2( px1, offset + tsz.y ), col );
                 draw->AddRect( wpos + ImVec2( px0, offset ), wpos + ImVec2( px1, offset + tsz.y ), outline, 0.f, -1 );
 
+                auto origSymName = symName;
                 if( tsz.x > zsz )
                 {
                     symName = ShortenNamespace( symName );
@@ -4160,7 +4174,7 @@ int View::DrawGhostLevel( const Vector<GhostZone>& vec, bool hover, double pxns,
                     ImGui::BeginTooltip();
                     TextDisabledUnformatted( ICON_FA_GHOST " Ghost zone" );
                     ImGui::Separator();
-                    ImGui::TextUnformatted( symName );
+                    ImGui::TextUnformatted( origSymName );
                     if( isInline )
                     {
                         ImGui::SameLine();
@@ -8444,6 +8458,12 @@ void View::DrawOptions()
                 else
                 {
                     ImGui::TextDisabled( "%s threads", RealToString( gpuData[i]->threadData.size() ) );
+                }
+                if( gpuData[i]->name.Active() )
+                {
+                    ImGui::PushFont( m_smallFont );
+                    TextFocused( "Name:", m_worker.GetString( gpuData[i]->name ) );
+                    ImGui::PopFont();
                 }
                 if( !gpuData[i]->hasCalibration )
                 {
@@ -13606,6 +13626,15 @@ void View::DrawInfo()
     if( m_bigFont ) ImGui::PushFont( m_bigFont );
     TextFocused( "Program:", m_worker.GetCaptureProgram().c_str() );
     if( m_bigFont ) ImGui::PopFont();
+    const auto exectime = m_worker.GetExecutableTime();
+    if( exectime != 0 )
+    {
+        char etmp[64];
+        time_t et = exectime;
+        auto elt = localtime( &et );
+        strftime( etmp, 64, "%F %T", elt );
+        TextFocused( "Build time:", etmp );
+    }
     TextFocused( "Capture time:", dtmp );
     if( !m_filename.empty() )
     {

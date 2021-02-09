@@ -404,6 +404,7 @@ public:
     const std::string& GetCaptureName() const { return m_captureName; }
     const std::string& GetCaptureProgram() const { return m_captureProgram; }
     uint64_t GetCaptureTime() const { return m_captureTime; }
+    uint64_t GetExecutableTime() const { return m_executableTime; }
     const std::string& GetHostInfo() const { return m_hostInfo; }
     int64_t GetDelay() const { return m_delay; }
     int64_t GetResolution() const { return m_resolution; }
@@ -594,6 +595,8 @@ private:
     void Exec();
     void Query( ServerQuery type, uint64_t data, uint32_t extra = 0 );
     void QueryTerminate();
+    void QuerySourceFile( const char* fn );
+    void QueryDataTransfer( const void* ptr, size_t size );
 
     tracy_force_inline bool DispatchProcess( const QueueItem& ev, const char*& ptr );
     tracy_force_inline bool Process( const QueueItem& ev );
@@ -641,6 +644,7 @@ private:
     tracy_force_inline void ProcessGpuZoneEnd( const QueueGpuZoneEnd& ev, bool serial );
     tracy_force_inline void ProcessGpuTime( const QueueGpuTime& ev );
     tracy_force_inline void ProcessGpuCalibration( const QueueGpuCalibration& ev );
+    tracy_force_inline void ProcessGpuContextName( const QueueGpuContextName& ev );
     tracy_force_inline MemEvent* ProcessMemAlloc( const QueueMemAlloc& ev );
     tracy_force_inline MemEvent* ProcessMemAllocNamed( const QueueMemAlloc& ev );
     tracy_force_inline MemEvent* ProcessMemFree( const QueueMemFree& ev );
@@ -750,6 +754,7 @@ private:
     void AddExternalThreadName( uint64_t ptr, const char* str, size_t sz );
     void AddFrameImageData( uint64_t ptr, const char* data, size_t sz );
     void AddSymbolCode( uint64_t ptr, const char* data, size_t sz );
+    void AddSourceCode( const char* data, size_t sz );
 
     tracy_force_inline void AddCallstackPayload( uint64_t ptr, const char* data, size_t sz );
     tracy_force_inline void AddCallstackAllocPayload( uint64_t ptr, const char* data, size_t sz );
@@ -841,6 +846,7 @@ private:
     std::string m_captureName;
     std::string m_captureProgram;
     uint64_t m_captureTime;
+    uint64_t m_executableTime;
     std::string m_hostInfo;
     uint64_t m_pid;
     int64_t m_samplingPeriod;
@@ -942,6 +948,7 @@ private:
     size_t m_tmpBufSize = 0;
 
     unordered_flat_map<uint64_t, uint32_t> m_nextCallstack;
+    std::vector<const char*> m_sourceCodeQuery;
 };
 
 }
