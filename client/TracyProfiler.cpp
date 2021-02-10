@@ -2076,8 +2076,8 @@ Profiler::DequeueStatus Profiler::Dequeue( moodycamel::ConsumerToken& token )
                     case QueueType::GpuContextName:
                     {
                         ptr = MemRead<uint64_t>( &item->gpuContextNameFat.ptr );
-                        uint16_t size = MemRead<uint16_t>( &item->gpuContextNameFat.size );
-                        SendSingleString( (const char*)ptr, size );
+                        uint16_t nameSize = MemRead<uint16_t>( &item->gpuContextNameFat.size );
+                        SendSingleString( (const char*)ptr, nameSize );
 #ifndef TRACY_ON_DEMAND
                         tracy_free( (void*)ptr );
 #endif
@@ -3234,7 +3234,7 @@ void Profiler::HandleSourceCodeQuery()
             auto ptr = (char*)tracy_malloc( st.st_size );
             auto rd = fread( ptr, 1, st.st_size, f );
             fclose( f );
-            if( rd == st.st_size )
+            if( rd == (size_t)st.st_size )
             {
                 SendLongString( (uint64_t)ptr, ptr, rd, QueueType::SourceCode );
             }
