@@ -374,10 +374,11 @@ Worker::Worker( const char* name, const char* program, const std::vector<ImportE
             zone->SetEnd( v.timestamp );
 
 #ifndef TRACY_NO_STATISTICS
-            auto slz = GetSourceLocationZones( zone->SrcLoc() );
-            auto& ztd = slz->zones.push_next();
+            ZoneThreadData ztd;
             ztd.SetZone( zone );
             ztd.SetThread( CompressThread( v.tid ) );
+            auto slz = GetSourceLocationZones( zone->SrcLoc() );
+            slz->zones.push_back( ztd );
 #else
             CountZoneStatistics( zone );
 #endif
@@ -1785,7 +1786,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                         }
                         for( auto& v : counts ) UpdateSampleStatistics( v.first, v.second, false );
                     }
-                    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+                    std::lock_guard<std::mutex> lock( m_data.lock );
                     m_data.callstackSamplesReady = true;
                 } ) );
 
@@ -1801,7 +1802,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                             gcnt += AddGhostZone( GetCallstack( sd.callstack.Val() ), &t->ghostZones, sd.time.Val() );
                         }
                     }
-                    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+                    std::lock_guard<std::mutex> lock( m_data.lock );
                     m_data.ghostZonesReady = true;
                     m_data.ghostCnt = gcnt;
                 } ) );
@@ -1835,7 +1836,7 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                     {
                         pdqsort_branchless( v.second.begin(), v.second.end(), []( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
                     }
-                    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+                    std::lock_guard<std::mutex> lock( m_data.lock );
                     m_data.symbolSamplesReady = true;
                 } ) );
             }
@@ -1845,15 +1846,10 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
             for( auto& v : m_data.sourceLocationZones )
             {
                 if( m_shutdown.load( std::memory_order_relaxed ) ) return;
-                auto& zones = v.second.zones;
-#ifdef NO_PARALLEL_SORT
-                pdqsort_branchless( zones.begin(), zones.end(), []( const auto& lhs, const auto& rhs ) { return lhs.Zone()->Start() < rhs.Zone()->Start(); } );
-#else
-                std::sort( std::execution::par_unseq, zones.begin(), zones.end(), []( const auto& lhs, const auto& rhs ) { return lhs.Zone()->Start() < rhs.Zone()->Start(); } );
-#endif
+                if( !v.second.zones.is_sorted() ) v.second.zones.sort();
             }
             {
-                std::lock_guard<std::shared_mutex> lock( m_data.lock );
+                std::lock_guard<std::mutex> lock( m_data.lock );
                 m_data.sourceLocationZonesReady = true;
             }
 
@@ -2779,7 +2775,7 @@ void Worker::Exec()
         const char* end = ptr + netbuf.size;
 
         {
-            std::lock_guard<std::shared_mutex> lock( m_data.lock );
+            std::lock_guard<std::mutex> lock( m_data.lock );
             while( ptr < end )
             {
                 auto ev = (const QueueItem*)ptr;
@@ -2795,38 +2791,6 @@ void Worker::Exec()
                 std::lock_guard<std::mutex> lock( m_netWriteLock );
                 m_netWriteCnt++;
                 m_netWriteCv.notify_one();
-            }
-
-            HandlePostponedPlots();
-#ifndef TRACY_NO_STATISTICS
-            if( m_data.newFramesWereReceived )
-            {
-                HandlePostponedSamples();
-                HandlePostponedGhostZones();
-                m_data.newFramesWereReceived = false;
-            }
-#endif
-            if( m_data.newSymbolsIndex >= 0 )
-            {
-#ifdef NO_PARALLEL_SORT
-                pdqsort_branchless( m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
-#else
-                std::sort( std::execution::par_unseq, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
-#endif
-                const auto ms = std::lower_bound( m_data.symbolLoc.begin(), m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc[m_data.newSymbolsIndex], [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
-                std::inplace_merge( ms, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
-                m_data.newSymbolsIndex = -1;
-            }
-            if( m_data.newInlineSymbolsIndex >= 0 )
-            {
-#ifdef NO_PARALLEL_SORT
-                pdqsort_branchless( m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
-#else
-                std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
-#endif
-                const auto ms = std::lower_bound( m_data.symbolLocInline.begin(), m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline[m_data.newInlineSymbolsIndex] );
-                std::inplace_merge( ms, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
-                m_data.newInlineSymbolsIndex = -1;
             }
 
             if( !m_serverQueryQueue.empty() && m_serverQuerySpaceLeft > 0 )
@@ -3924,25 +3888,11 @@ void Worker::InsertPlot( PlotData* plot, int64_t time, double val )
         plot->max = val;
         plot->data.push_back( { Int48( time ), val } );
     }
-    else if( plot->data.back().time.Val() < time )
-    {
-        if( plot->min > val ) plot->min = val;
-        else if( plot->max < val ) plot->max = val;
-        plot->data.push_back_non_empty( { Int48( time ), val } );
-    }
     else
     {
         if( plot->min > val ) plot->min = val;
         else if( plot->max < val ) plot->max = val;
-        if( plot->postpone.empty() )
-        {
-            plot->postponeTime = std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
-            plot->postpone.push_back( { Int48( time ), val } );
-        }
-        else
-        {
-            plot->postpone.push_back_non_empty( { Int48( time ), val } );
-        }
+        plot->data.push_back( { Int48( time ), val } );
     }
 }
 
@@ -3967,26 +3917,51 @@ void Worker::HandleFrameName( uint64_t name, const char* str, size_t sz )
     } );
 }
 
-void Worker::HandlePostponedPlots()
+void Worker::DoPostponedWork()
 {
     for( auto& plot : m_data.plots.Data() )
     {
-        auto& src = plot->postpone;
-        if( src.empty() ) continue;
-        if( std::chrono::duration_cast<std::chrono::milliseconds>( std::chrono::high_resolution_clock::now().time_since_epoch() ).count() - plot->postponeTime < 100 ) continue;
-        auto& dst = plot->data;
-#ifdef NO_PARALLEL_SORT
-        pdqsort_branchless( src.begin(), src.end(), [] ( const auto& l, const auto& r ) { return l.time.Val() < r.time.Val(); } );
-#else
-        std::sort( std::execution::par_unseq, src.begin(), src.end(), [] ( const auto& l, const auto& r ) { return l.time.Val() < r.time.Val(); } );
+        if( !plot->data.is_sorted() ) plot->data.sort();
+    }
+
+#ifndef TRACY_NO_STATISTICS
+    if( m_data.newFramesWereReceived )
+    {
+        HandlePostponedSamples();
+        HandlePostponedGhostZones();
+        m_data.newFramesWereReceived = false;
+    }
+
+    if( m_data.sourceLocationZonesReady )
+    {
+        for( auto& slz : m_data.sourceLocationZones )
+        {
+            if( !slz.second.zones.is_sorted() ) slz.second.zones.sort();
+        }
+    }
 #endif
-        const auto ds = std::lower_bound( dst.begin(), dst.end(), src.front().time.Val(), [] ( const auto& l, const auto& r ) { return l.time.Val() < r; } );
-        const auto dsd = std::distance( dst.begin(), ds ) ;
-        const auto de = std::lower_bound( ds, dst.end(), src.back().time.Val(), [] ( const auto& l, const auto& r ) { return l.time.Val() < r; } );
-        const auto ded = std::distance( dst.begin(), de );
-        dst.insert( de, src.begin(), src.end() );
-        std::inplace_merge( dst.begin() + dsd, dst.begin() + ded, dst.begin() + ded + src.size(), [] ( const auto& l, const auto& r ) { return l.time.Val() < r.time.Val(); } );
-        src.clear();
+
+    if( m_data.newSymbolsIndex >= 0 )
+    {
+#ifdef NO_PARALLEL_SORT
+        pdqsort_branchless( m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+#else
+        std::sort( std::execution::par_unseq, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+#endif
+        const auto ms = std::lower_bound( m_data.symbolLoc.begin(), m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc[m_data.newSymbolsIndex], [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+        std::inplace_merge( ms, m_data.symbolLoc.begin() + m_data.newSymbolsIndex, m_data.symbolLoc.end(), [] ( const auto& l, const auto& r ) { return l.addr < r.addr; } );
+        m_data.newSymbolsIndex = -1;
+    }
+    if( m_data.newInlineSymbolsIndex >= 0 )
+    {
+#ifdef NO_PARALLEL_SORT
+        pdqsort_branchless( m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
+#else
+        std::sort( std::execution::par_unseq, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
+#endif
+        const auto ms = std::lower_bound( m_data.symbolLocInline.begin(), m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline[m_data.newInlineSymbolsIndex] );
+        std::inplace_merge( ms, m_data.symbolLocInline.begin() + m_data.newInlineSymbolsIndex, m_data.symbolLocInline.end() );
+        m_data.newInlineSymbolsIndex = -1;
     }
 }
 
@@ -4586,10 +4561,11 @@ void Worker::ProcessZoneEnd( const QueueZoneEnd& ev )
     const auto timeSpan = timeEnd - zone->Start();
     if( timeSpan > 0 )
     {
-        auto slz = GetSourceLocationZones( zone->SrcLoc() );
-        auto& ztd = slz->zones.push_next();
+        ZoneThreadData ztd;
         ztd.SetZone( zone );
         ztd.SetThread( CompressThread( m_threadCtx ) );
+        auto slz = GetSourceLocationZones( zone->SrcLoc() );
+        slz->zones.push_back( ztd );
         if( slz->min > timeSpan ) slz->min = timeSpan;
         if( slz->max < timeSpan ) slz->max = timeSpan;
         slz->total += timeSpan;
@@ -4647,6 +4623,13 @@ void Worker::ZoneNameFailure( uint64_t thread )
 void Worker::MemFreeFailure( uint64_t thread )
 {
     m_failure = Failure::MemFree;
+    m_failureData.thread = thread;
+    m_failureData.callstack = m_serialNextCallstack;
+}
+
+void Worker::MemAllocTwiceFailure( uint64_t thread )
+{
+    m_failure = Failure::MemAllocTwice;
     m_failureData.thread = thread;
     m_failureData.callstack = m_serialNextCallstack;
 }
@@ -4883,7 +4866,7 @@ void Worker::ProcessZoneColor( const QueueZoneColor& ev )
     auto& stack = td->stack;
     auto zone = stack.back();
     auto& extra = RequestZoneExtra( *zone );
-    const uint32_t color = ( ev.b << 16 ) | ( ev.g << 8 ) | ev.r;
+    const uint32_t color = ( ev.r << 16 ) | ( ev.g << 8 ) | ev.b;
     extra.color = color;
 }
 
@@ -5534,13 +5517,18 @@ void Worker::ProcessGpuContextName( const QueueGpuContextName& ev )
 
 MemEvent* Worker::ProcessMemAllocImpl( uint64_t memname, MemData& memdata, const QueueMemAlloc& ev )
 {
+    if( memdata.active.find( ev.ptr ) != memdata.active.end() )
+    {
+        MemAllocTwiceFailure( ev.thread );
+        return nullptr;
+    }
+
     const auto refTime = m_refTimeSerial + ev.time;
     m_refTimeSerial = refTime;
     const auto time = TscTime( refTime - m_data.baseTime );
     if( m_data.lastTime < time ) m_data.lastTime = time;
     NoticeThread( ev.thread );
 
-    assert( memdata.active.find( ev.ptr ) == memdata.active.end() );
     assert( memdata.data.empty() || memdata.data.back().TimeAlloc() <= time );
 
     memdata.active.emplace( ev.ptr, memdata.data.size() );
@@ -5649,9 +5637,8 @@ MemEvent* Worker::ProcessMemFreeNamed( const QueueMemFree& ev )
 void Worker::ProcessMemAllocCallstack( const QueueMemAlloc& ev )
 {
     auto mem = ProcessMemAlloc( ev );
-    assert( mem );
     assert( m_serialNextCallstack != 0 );
-    mem->SetCsAlloc( m_serialNextCallstack );
+    if( mem ) mem->SetCsAlloc( m_serialNextCallstack );
     m_serialNextCallstack = 0;
 }
 
@@ -5668,9 +5655,8 @@ void Worker::ProcessMemAllocCallstackNamed( const QueueMemAlloc& ev )
         it->second->name = memname;
     }
     auto mem = ProcessMemAllocImpl( memname, *it->second, ev );
-    assert( mem );
     assert( m_serialNextCallstack != 0 );
-    mem->SetCsAlloc( m_serialNextCallstack );
+    if( mem ) mem->SetCsAlloc( m_serialNextCallstack );
     m_serialNextCallstack = 0;
 }
 
@@ -6057,7 +6043,7 @@ void Worker::ProcessSysTime( const QueueSysTime& ev )
         assert( m_sysTimePlot->data.back().time.Val() <= time );
         if( m_sysTimePlot->min > val ) m_sysTimePlot->min = val;
         else if( m_sysTimePlot->max < val ) m_sysTimePlot->max = val;
-        m_sysTimePlot->data.push_back_non_empty( { time, val } );
+        m_sysTimePlot->data.push_back( { time, val } );
     }
 }
 
@@ -6225,7 +6211,7 @@ void Worker::MemAllocChanged( uint64_t memname, MemData& memdata, int64_t time )
         assert( memdata.plot->data.back().time.Val() <= time );
         if( memdata.plot->min > val ) memdata.plot->min = val;
         else if( memdata.plot->max < val ) memdata.plot->max = val;
-        memdata.plot->data.push_back_non_empty( { time, val } );
+        memdata.plot->data.push_back( { time, val } );
     }
 }
 
@@ -6252,7 +6238,7 @@ void Worker::ReconstructMemAllocPlot( MemData& mem )
 
     PlotData* plot;
     {
-        std::lock_guard<std::shared_mutex> lock( m_data.lock );
+        std::lock_guard<std::mutex> lock( m_data.lock );
         plot = m_slab.AllocInit<PlotData>();
     }
 
@@ -6336,7 +6322,7 @@ void Worker::ReconstructMemAllocPlot( MemData& mem )
     plot->min = 0;
     plot->max = max;
 
-    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+    std::lock_guard<std::mutex> lock( m_data.lock );
     m_data.plots.Data().insert( m_data.plots.Data().begin(), plot );
     mem.plot = plot;
 }
@@ -6432,7 +6418,7 @@ void Worker::ReconstructContextSwitchUsage()
         }
     }
 
-    std::lock_guard<std::shared_mutex> lock( m_data.lock );
+    std::lock_guard<std::mutex> lock( m_data.lock );
     m_data.ctxUsageReady = true;
 }
 
@@ -6687,10 +6673,11 @@ void Worker::ReconstructZoneStatistics( ZoneEvent& zone, uint16_t thread )
     {
         auto it = m_data.sourceLocationZones.find( zone.SrcLoc() );
         assert( it != m_data.sourceLocationZones.end() );
-        auto& slz = it->second;
-        auto& ztd = slz.zones.push_next();
+        ZoneThreadData ztd;
         ztd.SetZone( &zone );
         ztd.SetThread( thread );
+        auto& slz = it->second;
+        slz.zones.push_back( ztd );
         if( slz.min > timeSpan ) slz.min = timeSpan;
         if( slz.max < timeSpan ) slz.max = timeSpan;
         slz.total += timeSpan;
@@ -6846,6 +6833,8 @@ void Worker::Disconnect()
 
 void Worker::Write( FileWrite& f )
 {
+    DoPostponedWork();
+
     f.Write( FileHeader, sizeof( FileHeader ) );
 
     f.Write( &m_delay, sizeof( m_delay ) );
@@ -7429,6 +7418,7 @@ static const char* s_failureReasons[] = {
     "Zone color transfer destination doesn't match active zone.",
     "Zone name transfer destination doesn't match active zone.",
     "Memory free event without a matching allocation.",
+    "Memory allocation event was reported for an address that is already tracked and not freed.",
     "Discontinuous frame begin/end mismatch.",
     "Frame image offset is invalid.",
     "Multiple frame images were sent for a single frame.",

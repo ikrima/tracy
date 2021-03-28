@@ -172,7 +172,9 @@ public:
 private:
     struct SourceLocationZones
     {
-        Vector<ZoneThreadData> zones;
+        struct ZtdSort { bool operator()( const ZoneThreadData& lhs, const ZoneThreadData& rhs ) { return lhs.Zone()->Start() < rhs.Zone()->Start(); } };
+
+        SortedVector<ZoneThreadData, ZtdSort> zones;
         int64_t min = std::numeric_limits<int64_t>::max();
         int64_t max = std::numeric_limits<int64_t>::min();
         int64_t total = 0;
@@ -233,7 +235,7 @@ private:
 
     struct DataBlock
     {
-        std::shared_mutex lock;
+        std::mutex lock;
         StringDiscovery<FrameData*> frames;
         FrameData* framesBase;
         Vector<GpuCtxData*> gpuData;
@@ -387,6 +389,7 @@ public:
         ZoneColor,
         ZoneName,
         MemFree,
+        MemAllocTwice,
         FrameEnd,
         FrameImageIndex,
         FrameImageTwice,
@@ -413,7 +416,7 @@ public:
     uint32_t GetCpuId() const { return m_data.cpuId; }
     const char* GetCpuManufacturer() const { return m_data.cpuManufacturer; }
 
-    std::shared_mutex& GetDataLock() { return m_data.lock; }
+    std::mutex& GetDataLock() { return m_data.lock; }
     size_t GetFrameCount( const FrameData& fd ) const { return fd.frames.size(); }
     size_t GetFullFrameCount( const FrameData& fd ) const;
     int64_t GetLastTime() const { return m_data.lastTime; }
@@ -590,6 +593,8 @@ public:
 
     std::pair<uint64_t, uint64_t> GetTextureCompressionBytes() const { return std::make_pair( m_texcomp.GetInputBytesCount(), m_texcomp.GetOutputBytesCount() ); }
 
+    void DoPostponedWork();
+
 private:
     void Network();
     void Exec();
@@ -684,6 +689,7 @@ private:
     void ZoneColorFailure( uint64_t thread );
     void ZoneNameFailure( uint64_t thread );
     void MemFreeFailure( uint64_t thread );
+    void MemAllocTwiceFailure( uint64_t thread );
     void FrameEndFailure();
     void FrameImageIndexFailure();
     void FrameImageTwiceFailure();
@@ -763,7 +769,6 @@ private:
     void HandlePlotName( uint64_t name, const char* str, size_t sz );
     void HandleFrameName( uint64_t name, const char* str, size_t sz );
 
-    void HandlePostponedPlots();
     void HandlePostponedSamples();
     void HandlePostponedGhostZones();
 

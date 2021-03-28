@@ -134,6 +134,7 @@ View::View( void(*cbMainThread)(std::function<void()>), const char* addr, uint16
     , m_reactToLostConnection( true )
     , m_smallFont( smallFont )
     , m_bigFont( bigFont )
+    , m_fixedFont( fixedWidth )
     , m_stcb( stcb )
     , m_gwcb( gwcb )
     , m_userData()
@@ -155,6 +156,7 @@ View::View( void(*cbMainThread)(std::function<void()>), FileRead& f, ImFont* fix
     , m_messagesScrollBottom( false )
     , m_smallFont( smallFont )
     , m_bigFont( bigFont )
+    , m_fixedFont( fixedWidth )
     , m_stcb( stcb )
     , m_gwcb( gwcb )
     , m_userData( m_worker.GetCaptureProgram().c_str(), m_worker.GetCaptureTime() )
@@ -459,7 +461,6 @@ bool View::Draw()
             if( ImGui::TreeNode( "Call stack" ) )
             {
                 ImGui::BeginChild( "##callstackFailure", ImVec2( 1200, 500 ) );
-                const auto w = ImGui::GetWindowWidth();
                 if( ImGui::BeginTable( "##callstack", 4, ImGuiTableFlags_Resizable | ImGuiTableFlags_Borders ) )
                 {
                     ImGui::TableSetupColumn( "Frame", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize );
@@ -730,7 +731,8 @@ bool View::DrawImpl()
             ImGui::EndPopup();
         }
     }
-    std::shared_lock<std::shared_mutex> lock( m_worker.GetDataLock() );
+    std::lock_guard<std::mutex> lock( m_worker.GetDataLock() );
+    m_worker.DoPostponedWork();
     if( !m_worker.IsDataStatic() )
     {
         if( m_worker.IsConnected() )
@@ -1407,7 +1409,7 @@ bool View::DrawConnection()
     ImGui::GetWindowDrawList()->AddCircleFilled( wpos + ImVec2( 1 + cs * 0.5, 3 + ty * 1.75 ), cs * 0.5, isConnected ? 0xFF2222CC : 0xFF444444, 10 );
 
     {
-        std::shared_lock<std::shared_mutex> lock( m_worker.GetDataLock() );
+        std::lock_guard<std::mutex> lock( m_worker.GetDataLock() );
         ImGui::SameLine();
         TextFocused( "+", RealToString( m_worker.GetSendInFlight() ) );
         const auto sz = m_worker.GetFrameCount( *m_frames );
@@ -1475,7 +1477,7 @@ bool View::DrawConnection()
                 m_userData.StateShouldBePreserved();
                 m_saveThreadState.store( SaveThreadState::Saving, std::memory_order_relaxed );
                 m_saveThread = std::thread( [this, f{std::move( f )}] {
-                    std::shared_lock<std::shared_mutex> lock( m_worker.GetDataLock() );
+                    std::lock_guard<std::mutex> lock( m_worker.GetDataLock() );
                     m_worker.Write( *f );
                     f->Finish();
                     const auto stats = f->GetCompressionStatistics();
@@ -1489,7 +1491,7 @@ bool View::DrawConnection()
 
     ImGui::SameLine( 0, 2 * ty );
     const char* stopStr = ICON_FA_PLUG " Stop";
-    std::shared_lock<std::shared_mutex> lock( m_worker.GetDataLock() );
+    std::lock_guard<std::mutex> lock( m_worker.GetDataLock() );
     if( !m_disconnectIssued && m_worker.IsConnected() )
     {
         if( ImGui::Button( stopStr ) )
@@ -6196,6 +6198,7 @@ int View::DrawPlots( int offset, double pxns, const ImVec2& wpos, bool hover, fl
 
     for( const auto& v : m_worker.GetPlots() )
     {
+        assert( v->data.is_sorted() );
         auto& vis = Vis( v );
         if( !vis.visible )
         {
@@ -8710,15 +8713,19 @@ void View::DrawOptions()
                             ImGui::SameLine();
                         }
                         ImGui::TextDisabled( "(%s) %s:%i", RealToString( l.second->timeline.size() ), fileName, sl.line );
-                        if( ImGui::IsItemClicked( 1 ) )
+                        if( ImGui::IsItemHovered() )
                         {
-                            if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                            DrawSourceTooltip( fileName, sl.line, 1, 1 );
+                            if( ImGui::IsItemClicked( 1 ) )
                             {
-                                ViewSource( fileName, sl.line );
-                            }
-                            else
-                            {
-                                m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                                {
+                                    ViewSource( fileName, sl.line );
+                                }
+                                else
+                                {
+                                    m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                }
                             }
                         }
                     }
@@ -8784,15 +8791,19 @@ void View::DrawOptions()
                             ImGui::SameLine();
                         }
                         ImGui::TextDisabled( "(%s) %s:%i", RealToString( l.second->timeline.size() ), fileName, sl.line );
-                        if( ImGui::IsItemClicked( 1 ) )
+                        if( ImGui::IsItemHovered() )
                         {
-                            if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                            DrawSourceTooltip( fileName, sl.line, 1, 1 );
+                            if( ImGui::IsItemClicked( 1 ) )
                             {
-                                ViewSource( fileName, sl.line );
-                            }
-                            else
-                            {
-                                m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                                {
+                                    ViewSource( fileName, sl.line );
+                                }
+                                else
+                                {
+                                    m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                }
                             }
                         }
                     }
@@ -8858,15 +8869,19 @@ void View::DrawOptions()
                             ImGui::SameLine();
                         }
                         ImGui::TextDisabled( "(%s) %s:%i", RealToString( l.second->timeline.size() ), fileName, sl.line );
-                        if( ImGui::IsItemClicked( 1 ) )
+                        if( ImGui::IsItemHovered() )
                         {
-                            if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                            DrawSourceTooltip( fileName, sl.line, 1, 1 );
+                            if( ImGui::IsItemClicked( 1 ) )
                             {
-                                ViewSource( fileName, sl.line );
-                            }
-                            else
-                            {
-                                m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                                {
+                                    ViewSource( fileName, sl.line );
+                                }
+                                else
+                                {
+                                    m_optionsLockBuzzAnim.Enable( l.second->srcloc, 0.5f );
+                                }
                             }
                         }
                     }
@@ -9512,15 +9527,19 @@ void View::DrawFindZone()
                 }
                 const auto fileName = m_worker.GetString( srcloc.file );
                 ImGui::TextColored( ImVec4( 0.5, 0.5, 0.5, 1 ), "(%s) %s:%i", RealToString( zones.size() ), fileName, srcloc.line );
-                if( ImGui::IsItemClicked( 1 ) )
+                if( ImGui::IsItemHovered() )
                 {
-                    if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                    DrawSourceTooltip( fileName, srcloc.line );
+                    if( ImGui::IsItemClicked( 1 ) )
                     {
-                        ViewSource( fileName, srcloc.line );
-                    }
-                    else
-                    {
-                        m_findZoneBuzzAnim.Enable( idx, 0.5f );
+                        if( SourceFileValid( fileName, m_worker.GetCaptureTime(), *this, m_worker ) )
+                        {
+                            ViewSource( fileName, srcloc.line );
+                        }
+                        else
+                        {
+                            m_findZoneBuzzAnim.Enable( idx, 0.5f );
+                        }
                     }
                 }
                 ImGui::PopID();
@@ -12473,15 +12492,19 @@ void View::DrawStatistics()
                     const auto file = m_worker.GetString( srcloc.file );
 
                     ImGui::TextDisabled( "%s:%i", file, srcloc.line );
-                    if( ImGui::IsItemClicked( 1 ) )
+                    if( ImGui::IsItemHovered() )
                     {
-                        if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
+                        DrawSourceTooltip( file, srcloc.line );
+                        if( ImGui::IsItemClicked( 1 ) )
                         {
-                            ViewSource( file, srcloc.line );
-                        }
-                        else
-                        {
-                            m_statBuzzAnim.Enable( v.srcloc, 0.5f );
+                            if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
+                            {
+                                ViewSource( file, srcloc.line );
+                            }
+                            else
+                            {
+                                m_statBuzzAnim.Enable( v.srcloc, 0.5f );
+                            }
                         }
                     }
                     if( indentVal != 0.f )
@@ -12915,29 +12938,33 @@ void View::DrawStatistics()
                         {
                             TextDisabledUnformatted( file );
                         }
-                        if( ImGui::IsItemClicked( 1 ) )
+                        if( ImGui::IsItemHovered() )
                         {
-                            if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
+                            DrawSourceTooltip( file, line );
+                            if( ImGui::IsItemClicked( 1 ) )
                             {
-                                ViewSymbol( file, line, codeAddr, v.symAddr );
-                                if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( false );
-                            }
-                            else if( symlen != 0 )
-                            {
-                                uint32_t len;
-                                if( m_worker.GetSymbolCode( codeAddr, len ) )
+                                if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
                                 {
-                                    ViewSymbol( nullptr, 0, codeAddr, v.symAddr );
+                                    ViewSymbol( file, line, codeAddr, v.symAddr );
                                     if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( false );
+                                }
+                                else if( symlen != 0 )
+                                {
+                                    uint32_t len;
+                                    if( m_worker.GetSymbolCode( codeAddr, len ) )
+                                    {
+                                        ViewSymbol( nullptr, 0, codeAddr, v.symAddr );
+                                        if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( false );
+                                    }
+                                    else
+                                    {
+                                        m_statBuzzAnim.Enable( v.symAddr, 0.5f );
+                                    }
                                 }
                                 else
                                 {
                                     m_statBuzzAnim.Enable( v.symAddr, 0.5f );
                                 }
-                            }
-                            else
-                            {
-                                m_statBuzzAnim.Enable( v.symAddr, 0.5f );
                             }
                         }
                         if( indentVal != 0.f )
@@ -13088,29 +13115,33 @@ void View::DrawStatistics()
                                     {
                                         TextDisabledUnformatted( file );
                                     }
-                                    if( ImGui::IsItemClicked( 1 ) )
+                                    if( ImGui::IsItemHovered() )
                                     {
-                                        if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
+                                        DrawSourceTooltip( file, line );
+                                        if( ImGui::IsItemClicked( 1 ) )
                                         {
-                                            ViewSymbol( file, line, codeAddr, iv.symAddr );
-                                            if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( true );
-                                        }
-                                        else if( symlen != 0 )
-                                        {
-                                            uint32_t len;
-                                            if( m_worker.GetSymbolCode( codeAddr, len ) )
+                                            if( SourceFileValid( file, m_worker.GetCaptureTime(), *this, m_worker ) )
                                             {
-                                                ViewSymbol( nullptr, 0, codeAddr, iv.symAddr );
+                                                ViewSymbol( file, line, codeAddr, iv.symAddr );
                                                 if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( true );
+                                            }
+                                            else if( symlen != 0 )
+                                            {
+                                                uint32_t len;
+                                                if( m_worker.GetSymbolCode( codeAddr, len ) )
+                                                {
+                                                    ViewSymbol( nullptr, 0, codeAddr, iv.symAddr );
+                                                    if( !m_statSeparateInlines ) m_sourceView->CalcInlineStats( true );
+                                                }
+                                                else
+                                                {
+                                                    m_statBuzzAnim.Enable( iv.symAddr, 0.5f );
+                                                }
                                             }
                                             else
                                             {
                                                 m_statBuzzAnim.Enable( iv.symAddr, 0.5f );
                                             }
-                                        }
-                                        else
-                                        {
-                                            m_statBuzzAnim.Enable( iv.symAddr, 0.5f );
                                         }
                                     }
                                     if( indentVal != 0.f )
@@ -13434,7 +13465,7 @@ void View::DrawCallstackWindow()
                         assert( false );
                         break;
                     }
-                    if( ImGui::IsItemClicked( 1 ) )
+                    if( ImGui::IsItemHovered() )
                     {
                         if( m_showCallstackFrameAddress == 3 )
                         {
@@ -13442,21 +13473,37 @@ void View::DrawCallstackWindow()
                             if( sym )
                             {
                                 const auto symtxt = m_worker.GetString( sym->file );
-                                if( !ViewDispatch( symtxt, sym->line, frame.symAddr ) )
+                                DrawSourceTooltip( symtxt, sym->line );
+                            }
+                        }
+                        else
+                        {
+                            DrawSourceTooltip( txt, frame.line );
+                        }
+                        if( ImGui::IsItemClicked( 1 ) )
+                        {
+                            if( m_showCallstackFrameAddress == 3 )
+                            {
+                                const auto sym = m_worker.GetSymbolData( frame.symAddr );
+                                if( sym )
+                                {
+                                    const auto symtxt = m_worker.GetString( sym->file );
+                                    if( !ViewDispatch( symtxt, sym->line, frame.symAddr ) )
+                                    {
+                                        m_callstackBuzzAnim.Enable( bidx, 0.5f );
+                                    }
+                                }
+                                else
                                 {
                                     m_callstackBuzzAnim.Enable( bidx, 0.5f );
                                 }
                             }
                             else
                             {
-                                m_callstackBuzzAnim.Enable( bidx, 0.5f );
-                            }
-                        }
-                        else
-                        {
-                            if( !ViewDispatch( txt, frame.line, frame.symAddr ) )
-                            {
-                                m_callstackBuzzAnim.Enable( bidx, 0.5f );
+                                if( !ViewDispatch( txt, frame.line, frame.symAddr ) )
+                                {
+                                    m_callstackBuzzAnim.Enable( bidx, 0.5f );
+                                }
                             }
                         }
                     }
@@ -15288,12 +15335,12 @@ void View::DrawAnnotationList()
 void View::DrawSampleParents()
 {
     const auto symbol = m_worker.GetSymbolData( m_sampleParents.symAddr );
-    const auto stats = *m_worker.GetSymbolStats( m_sampleParents.symAddr );
+    const auto& stats = *m_worker.GetSymbolStats( m_sampleParents.symAddr );
     assert( !stats.parents.empty() );
 
     bool show = true;
     ImGui::SetNextWindowSize( ImVec2( 1400, 500 ), ImGuiCond_FirstUseEver );
-    ImGui::Begin( "Call stack sample parents", &show, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
+    ImGui::Begin( "Sample entry call stacks", &show, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse );
     ImGui::PushFont( m_bigFont );
     TextFocused( "Symbol:", m_worker.GetString( symbol->name ) );
     if( symbol->isInline )
@@ -15337,7 +15384,7 @@ void View::DrawSampleParents()
     ImGui::SameLine();
     TextDisabledUnformatted( m_worker.GetString( symbol->imageName ) );
     ImGui::Separator();
-    TextDisabledUnformatted( "Parent call stack:" );
+    TextDisabledUnformatted( "Entry call stack:" );
     ImGui::SameLine();
     if( ImGui::SmallButton( " " ICON_FA_CARET_LEFT " " ) )
     {
@@ -15513,7 +15560,7 @@ void View::DrawSampleParents()
                     assert( false );
                     break;
                 }
-                if( ImGui::IsItemClicked( 1 ) )
+                if( ImGui::IsItemHovered() )
                 {
                     if( m_showCallstackFrameAddress == 3 )
                     {
@@ -15521,21 +15568,37 @@ void View::DrawSampleParents()
                         if( sym )
                         {
                             const auto symtxt = m_worker.GetString( sym->file );
-                            if( !ViewDispatch( symtxt, sym->line, frame.symAddr ) )
+                            DrawSourceTooltip( symtxt, sym->line );
+                        }
+                    }
+                    else
+                    {
+                        DrawSourceTooltip( txt, frame.line );
+                    }
+                    if( ImGui::IsItemClicked( 1 ) )
+                    {
+                        if( m_showCallstackFrameAddress == 3 )
+                        {
+                            const auto sym = m_worker.GetSymbolData( frame.symAddr );
+                            if( sym )
+                            {
+                                const auto symtxt = m_worker.GetString( sym->file );
+                                if( !ViewDispatch( symtxt, sym->line, frame.symAddr ) )
+                                {
+                                    m_sampleParentBuzzAnim.Enable( bidx, 0.5f );
+                                }
+                            }
+                            else
                             {
                                 m_sampleParentBuzzAnim.Enable( bidx, 0.5f );
                             }
                         }
                         else
                         {
-                            m_sampleParentBuzzAnim.Enable( bidx, 0.5f );
-                        }
-                    }
-                    else
-                    {
-                        if( !ViewDispatch( txt, frame.line, frame.symAddr ) )
-                        {
-                            m_sampleParentBuzzAnim.Enable( bidx, 0.5f );
+                            if( !ViewDispatch( txt, frame.line, frame.symAddr ) )
+                            {
+                                m_sampleParentBuzzAnim.Enable( bidx, 0.5f );
+                            }
                         }
                     }
                 }
@@ -16600,11 +16663,15 @@ void View::DrawFrameTreeLevel( const unordered_flat_map<uint64_t, CallstackFrame
                 fileName = m_worker.GetString( frame.file );
                 ImGui::TextDisabled( "%s:%i", fileName, frame.line );
             }
-            if( ImGui::IsItemClicked( 1 ) )
+            if( ImGui::IsItemHovered() )
             {
-                if( !ViewDispatch( fileName, frame.line, frame.symAddr ) )
+                DrawSourceTooltip( fileName, frame.line );
+                if( ImGui::IsItemClicked( 1 ) )
                 {
-                    m_callstackTreeBuzzAnim.Enable( idx, 0.5f );
+                    if( !ViewDispatch( fileName, frame.line, frame.symAddr ) )
+                    {
+                        m_callstackTreeBuzzAnim.Enable( idx, 0.5f );
+                    }
                 }
             }
 
@@ -17187,40 +17254,23 @@ void View::CrashTooltip()
     ImGui::EndTooltip();
 }
 
-int View::GetZoneDepth( const ZoneEvent& zone, uint64_t tid ) const
-{
-    auto td = m_worker.GetThreadData( tid );
-    assert( td );
-    auto timeline = &td->timeline;
-    int depth = 0;
-    for(;;)
-    {
-        if( timeline->is_magic() )
-        {
-            auto vec = (Vector<ZoneEvent>*)timeline;
-            auto it = std::upper_bound( vec->begin(), vec->end(), zone.Start(), [] ( const auto& l, const auto& r ) { return l < r.Start(); } );
-            if( it != vec->begin() ) --it;
-            assert( !( zone.IsEndValid() && it->Start() > zone.End() ) );
-            if( it == &zone ) return depth;
-            assert( it->HasChildren() );
-            timeline = &m_worker.GetZoneChildren( it->Child() );
-            depth++;
-        }
-        else
-        {
-            auto it = std::upper_bound( timeline->begin(), timeline->end(), zone.Start(), [] ( const auto& l, const auto& r ) { return l < r->Start(); } );
-            if( it != timeline->begin() ) --it;
-            assert( !( zone.IsEndValid() && (*it)->Start() > zone.End() ) );
-            if( *it == &zone ) return depth;
-            assert( (*it)->HasChildren() );
-            timeline = &m_worker.GetZoneChildren( (*it)->Child() );
-            depth++;
-        }
-    }
-}
-
 const ZoneEvent* View::GetZoneParent( const ZoneEvent& zone ) const
 {
+#ifndef TRACY_NO_STATISTICS
+    if( m_worker.AreSourceLocationZonesReady() )
+    {
+        auto& slz = m_worker.GetZonesForSourceLocation( zone.SrcLoc() );
+        if( !slz.zones.empty() )
+        {
+            auto it = std::lower_bound( slz.zones.begin(), slz.zones.end(), zone.Start(), [] ( const auto& lhs, const auto& rhs ) { return lhs.Zone()->Start() < rhs; } );
+            if( it != slz.zones.end() && it->Zone() == &zone )
+            {
+                return GetZoneParent( zone, m_worker.DecompressThread( it->Thread() ) );
+            }
+        }
+    }
+#endif
+
     for( const auto& thread : m_worker.GetThreadData() )
     {
         const ZoneEvent* parent = nullptr;
@@ -17327,6 +17377,21 @@ const GpuEvent* View::GetZoneParent( const GpuEvent& zone ) const
 
 const ThreadData* View::GetZoneThreadData( const ZoneEvent& zone ) const
 {
+#ifndef TRACY_NO_STATISTICS
+    if( m_worker.AreSourceLocationZonesReady() )
+    {
+        auto& slz = m_worker.GetZonesForSourceLocation( zone.SrcLoc() );
+        if( !slz.zones.empty() )
+        {
+            auto it = std::lower_bound( slz.zones.begin(), slz.zones.end(), zone.Start(), [] ( const auto& lhs, const auto& rhs ) { return lhs.Zone()->Start() < rhs; } );
+            if( it != slz.zones.end() && it->Zone() == &zone )
+            {
+                return m_worker.GetThreadData( m_worker.DecompressThread( it->Thread() ) );
+            }
+        }
+    }
+#endif
+
     for( const auto& thread : m_worker.GetThreadData() )
     {
         const Vector<short_ptr<ZoneEvent>>* timeline = &thread->timeline;
@@ -17798,6 +17863,62 @@ const char* View::SourceSubstitution( const char* srcFile ) const
         std::swap( tmp, res );
     }
     return res.c_str();
+}
+
+void View::DrawSourceTooltip( const char* filename, uint32_t srcline, int before, int after, bool separateTooltip )
+{
+    if( !filename ) return;
+    if( !SourceFileValid( filename, m_worker.GetCaptureTime(), *this, m_worker ) ) return;
+    m_srcHintCache.Parse( filename, m_worker, *this );
+    if( m_srcHintCache.empty() ) return;
+    if( separateTooltip ) ImGui::BeginTooltip();
+    if( m_fixedFont ) ImGui::PushFont( m_fixedFont );
+    auto& lines = m_srcHintCache.get();
+    const int start = std::max( 0, (int)srcline - ( before+1 ) );
+    const int end = std::min<int>( m_srcHintCache.get().size(), srcline + after );
+    bool first = true;
+    int bottomEmpty = 0;
+    for( int i=start; i<end; i++ )
+    {
+        auto& line = lines[i];
+        if( line.begin == line.end )
+        {
+            if( !first ) bottomEmpty++;
+        }
+        else
+        {
+            first = false;
+            while( bottomEmpty > 0 )
+            {
+                ImGui::TextUnformatted( "" );
+                bottomEmpty--;
+            }
+
+            auto ptr = line.begin;
+            auto it = line.tokens.begin();
+            while( ptr < line.end )
+            {
+                if( it == line.tokens.end() )
+                {
+                    ImGui::TextUnformatted( ptr, line.end );
+                    ImGui::SameLine( 0, 0 );
+                    break;
+                }
+                if( ptr < it->begin )
+                {
+                    ImGui::TextUnformatted( ptr, it->begin );
+                    ImGui::SameLine( 0, 0 );
+                }
+                TextColoredUnformatted( i == srcline-1 ? SyntaxColors[(int)it->color] : SyntaxColorsDimmed[(int)it->color], it->begin, it->end );
+                ImGui::SameLine( 0, 0 );
+                ptr = it->end;
+                ++it;
+            }
+            ImGui::ItemSize( ImVec2( 0, 0 ), 0 );
+        }
+    }
+    if( m_fixedFont ) ImGui::PopFont();
+    if( separateTooltip ) ImGui::EndTooltip();
 }
 
 }
