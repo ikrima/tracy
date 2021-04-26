@@ -1830,11 +1830,28 @@ Worker::Worker( FileRead& f, EventType::Type eventMask, bool bgTasks )
                                     it->second.push_back_non_empty( SampleDataRange { time, ip } );
                                 }
                             }
+                            for( uint16_t i=1; i<callstack.size(); i++ )
+                            {
+                                auto addr = GetCanonicalPointer( callstack[i] );
+                                auto it = m_data.childSamples.find( addr );
+                                if( it == m_data.childSamples.end() )
+                                {
+                                    m_data.childSamples.emplace( addr, Vector<Int48>( time ) );
+                                }
+                                else
+                                {
+                                    it->second.push_back_non_empty( time );
+                                }
+                            }
                         }
                     }
                     for( auto& v : m_data.symbolSamples )
                     {
                         pdqsort_branchless( v.second.begin(), v.second.end(), []( const auto& lhs, const auto& rhs ) { return lhs.time.Val() < rhs.time.Val(); } );
+                    }
+                    for( auto& v : m_data.childSamples )
+                    {
+                        pdqsort_branchless( v.second.begin(), v.second.end(), []( const auto& lhs, const auto& rhs ) { return lhs.Val() < rhs.Val(); } );
                     }
                     std::lock_guard<std::mutex> lock( m_data.lock );
                     m_data.symbolSamplesReady = true;
@@ -1982,6 +1999,18 @@ uint64_t Worker::GetContextSwitchPerCpuCount() const
     }
     return cnt;
 }
+
+#ifndef TRACY_NO_STATISTICS
+uint64_t Worker::GetChildSamplesCountFull() const
+{
+    uint64_t cnt = 0;
+    for( auto& v : m_data.childSamples )
+    {
+        cnt += v.second.size();
+    }
+    return cnt;
+}
+#endif
 
 uint64_t Worker::GetPidFromTid( uint64_t tid ) const
 {
@@ -2194,6 +2223,14 @@ const Vector<SampleDataRange>* Worker::GetSamplesForSymbol( uint64_t symAddr ) c
     assert( m_data.symbolSamplesReady );
     auto it = m_data.symbolSamples.find( symAddr );
     if( it == m_data.symbolSamples.end() ) return nullptr;
+    return &it->second;
+}
+
+const Vector<Int48>* Worker::GetChildSamples( uint64_t addr ) const
+{
+    assert( m_data.symbolSamplesReady );
+    auto it = m_data.childSamples.find( addr );
+    if( it == m_data.childSamples.end() ) return nullptr;
     return &it->second;
 }
 #endif
@@ -5565,11 +5602,11 @@ MemEvent* Worker::ProcessMemFreeImpl( uint64_t memname, MemData& memdata, const 
     const auto refTime = m_refTimeSerial + ev.time;
     m_refTimeSerial = refTime;
 
-    if( ev.ptr == 0 ) return nullptr;
-
     auto it = memdata.active.find( ev.ptr );
     if( it == memdata.active.end() )
     {
+        if( ev.ptr == 0 ) return nullptr;
+
         if( !m_ignoreMemFreeFaults )
         {
             CheckThreadString( ev.thread );
@@ -5791,6 +5828,19 @@ void Worker::ProcessCallstackSample( const QueueCallstackSample& ev )
             {
                 sit->second.push_back_non_empty( SampleDataRange { sd.time, ip } );
             }
+        }
+    }
+    for( uint16_t i=1; i<cs.size(); i++ )
+    {
+        auto addr = GetCanonicalPointer( cs[i] );
+        auto it = m_data.childSamples.find( addr );
+        if( it == m_data.childSamples.end() )
+        {
+            m_data.childSamples.emplace( addr, Vector<Int48>( sd.time ) );
+        }
+        else
+        {
+            it->second.push_back_non_empty( sd.time );
         }
     }
 
@@ -6519,7 +6569,7 @@ void Worker::UpdateSampleStatisticsImpl( const CallstackFrameData** frames, uint
     CallstackFrameId parentFrameId;
     if( fxsz != 1 )
     {
-        auto cfdata = (CallstackFrame*)alloca( ( fxsz-1 ) * sizeof( CallstackFrame ) );
+        auto cfdata = (CallstackFrame*)alloca( uint8_t( fxsz-1 ) * sizeof( CallstackFrame ) );
         for( int i=0; i<fxsz-1; i++ )
         {
             cfdata[i] = fexcl->data[i+1];

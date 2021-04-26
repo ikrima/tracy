@@ -618,7 +618,7 @@ bool View::DrawImpl()
         bool keepOpen = true;
         char tmp[2048];
         sprintf( tmp, "%s###Connection", m_worker.GetAddr().c_str() );
-        ImGui::Begin( tmp, &keepOpen, ImGuiWindowFlags_AlwaysAutoResize );
+        ImGui::Begin( tmp, &keepOpen, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse );
         TextCentered( ICON_FA_WIFI );
         ImGui::TextUnformatted( "Waiting for connection..." );
         DrawWaitingDots( s_time );
@@ -1133,7 +1133,8 @@ bool View::DrawImpl()
     if( m_reactToLostConnection && !m_worker.IsConnected() )
     {
         m_reactToLostConnection = false;
-        if( m_worker.GetSendInFlight() > 0 )
+        const auto inFlight = m_worker.GetSendInFlight();
+        if( inFlight > 1 || ( inFlight == 1 && !m_worker.WasDisconnectIssued() ) )
         {
             ImGui::OpenPopup( "Connection lost!" );
         }
@@ -13800,6 +13801,15 @@ void View::DrawInfo()
         }
         TextFocused( "Call stack samples:", RealToString( m_worker.GetCallstackSampleCount() ) );
         TextFocused( "Ghost zones:", RealToString( m_worker.GetGhostZonesCount() ) );
+#ifndef TRACY_NO_STATISTICS
+        TextFocused( "Child sample symbols:", RealToString( m_worker.GetChildSamplesCountSyms() ) );
+        if( ImGui::IsItemHovered() )
+        {
+            ImGui::BeginTooltip();
+            TextFocused( "Child samples:", RealToString( m_worker.GetChildSamplesCountFull() ) );
+            ImGui::EndTooltip();
+        }
+#endif
         TextFocused( "Frame images:", RealToString( ficnt ) );
         if( ficnt != 0 && ImGui::IsItemHovered() )
         {
