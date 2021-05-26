@@ -306,7 +306,6 @@ int main( int argc, char** argv )
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;  // Enable Multi-Viewport / Platform Windows
     //io.ConfigWindowsMoveFromTitleBarOnly = true;
-    //io.ConfigDockingWithShift = false;
 
     ImGui_ImplGlfw_InitForOpenGL( window, true );
     ImGui_ImplOpenGL3_Init( "#version 150" );
