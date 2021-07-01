@@ -1,6 +1,12 @@
 #ifndef __TRACYC_HPP__
 #define __TRACYC_HPP__
 
+// Beg #TPLibMod-tracy:  Allow user customization point/macro override through header
+#ifdef TRACY_USER_CONFIG
+  #include TRACY_USER_CONFIG
+#endif
+// End TPLibMod
+
 #include <stddef.h>
 #include <stdint.h>
 

@@ -11,6 +11,12 @@
 
 // Define TRACY_ENABLE to enable profiler.
 
+// Beg #TPLibMod-tracy:  Allow user customization point/macro override through header
+#ifdef TRACY_USER_CONFIG
+  #include TRACY_USER_CONFIG
+#endif
+// End TPLibMod
+
 #ifdef TRACY_ENABLE
 
 #include "common/TracySystem.cpp"
